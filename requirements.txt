@@ -1,0 +1,10 @@
+fastapi>=0.104.1
+uvicorn>=0.24.0
+pydantic>=2.5.0
+python-multipart>=0.0.6
+requests~=2.27.1
+# Note: yarl>=1.9.0 must be installed separately before PanoptoDownloader
+# because PanoptoDownloader requires yarl~=1.7.2 which doesn't build on Python 3.11+
+# Install with: pip install "yarl>=1.9.0" "multidict>=4.0" "propcache>=0.2.1" --no-deps
+# Then install PanoptoDownloader with --no-deps
+git+https://github.com/Panopto-Video-DL/Panopto-Video-DL-lib@v1.4.3#egg=PanoptoDownloader
