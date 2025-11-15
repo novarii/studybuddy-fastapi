@@ -1,5 +1,8 @@
 .venv/
 agno.db
 __pycache__/
-storage/
-data/
+# Ignore contents of storage/ and data/ but keep the directories
+storage/*
+!storage/.gitkeep
+data/*
+!data/.gitkeep
