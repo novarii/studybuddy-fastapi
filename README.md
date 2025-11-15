@@ -7,6 +7,7 @@ A FastAPI-based REST API for downloading videos from Panopto streaming URLs.
 - Download videos from Panopto stream URLs
 - Extract audio tracks (MP3 via ffmpeg) alongside each download
 - Transcribe audio tracks to text through the ElevenLabs Speech-to-Text API
+- Upload PDF slide decks for local storage (future processing)
 - Track download progress and status
 - List and manage downloaded videos
 - RESTful API with CORS support
@@ -129,6 +130,9 @@ Once the server is running, you can access:
 - `GET /api/videos/{video_id}/file` - Download video file
 - `DELETE /api/videos/{video_id}` - Delete a video
 
+### Document Management
+- `POST /api/documents/upload` - Upload PDF slides; file is saved under `storage/documents/` and metadata recorded in `data/documents.json`
+
 ## Example Usage
 
 ### Start a video download
@@ -163,6 +167,7 @@ studybuddy-fastapi/
 │   ├── main.py          # FastAPI application and routes
 │   ├── models.py        # Pydantic models
 │   ├── downloader.py    # Video download logic
+│   ├── document_storage.py # PDF storage utilities
 │   ├── storage.py       # Local storage management
 │   └── transcriber.py   # ElevenLabs speech-to-text integration
 ├── storage/
@@ -181,5 +186,6 @@ The server runs with auto-reload enabled when using the `--reload` flag, so chan
 
 - Videos are stored in the `storage/videos/` directory
 - Audio-only files are stored in `storage/audio/` and share the same `video_id` filename
+- Uploaded PDFs are stored in `storage/documents/` with metadata in `data/documents.json`
 - Metadata (including transcript text/status) is stored in `data/videos.json`
 - CORS is enabled for all origins (configure appropriately for production)

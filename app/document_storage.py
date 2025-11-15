@@ -1,0 +1,66 @@
+import json
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Optional
+
+from fastapi import UploadFile
+
+
+class DocumentStorage:
+    """Manage uploaded PDF documents and their metadata."""
+
+    def __init__(self, storage_dir: str = "storage/documents", data_dir: str = "data"):
+        self.storage_dir = Path(storage_dir)
+        self.data_dir = Path(data_dir)
+        self.metadata_file = self.data_dir / "documents.json"
+
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        if not self.metadata_file.exists():
+            self._save_metadata({})
+
+    def save_document(
+        self, upload_file: UploadFile, document_id: Optional[str] = None
+    ) -> Dict:
+        """Persist the uploaded PDF to disk and record metadata."""
+        doc_id = document_id or f"doc_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        destination = self.storage_dir / f"{doc_id}.pdf"
+
+        # Write the file in chunks to avoid loading into memory.
+        upload_file.file.seek(0)
+        with destination.open("wb") as dest:
+            while True:
+                chunk = upload_file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                dest.write(chunk)
+
+        metadata_entry = {
+            "document_id": doc_id,
+            "original_filename": upload_file.filename,
+            "content_type": upload_file.content_type,
+            "file_path": str(destination),
+            "file_size": destination.stat().st_size,
+            "uploaded_at": datetime.now().isoformat(),
+        }
+
+        metadata = self._load_metadata()
+        metadata[doc_id] = metadata_entry
+        self._save_metadata(metadata)
+
+        return metadata_entry
+
+    def list_documents(self) -> Dict[str, Dict]:
+        """Return all stored documents metadata."""
+        return self._load_metadata()
+
+    def _load_metadata(self) -> Dict[str, Dict]:
+        try:
+            with open(self.metadata_file, "r") as fh:
+                return json.load(fh)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+    def _save_metadata(self, metadata: Dict[str, Dict]) -> None:
+        with open(self.metadata_file, "w") as fh:
+            json.dump(metadata, fh, indent=2)

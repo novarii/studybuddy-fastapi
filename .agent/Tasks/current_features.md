@@ -20,6 +20,15 @@
   - Streamline error handling by retrying ElevenLabs failures or allowing manual re-transcription.
   - Consider queueing transcription so ffmpeg completion doesn’t block the download thread.
 
+## PDF Slide Uploads
+- **PRD Summary**: Allow users to upload supporting PDF slide decks for future processing or reference. Files must remain local and be retrievable via metadata APIs later.
+- **Implementation Snapshot**:
+  - `DocumentStorage.save_document` streams the incoming file to `storage/documents` and records metadata inside `data/documents.json`.
+  - `POST /api/documents/upload` validates MIME type/extension (PDF only) and returns the stored metadata (IDs, paths, timestamps).
+- **Next Steps**:
+  - Add listing and retrieval endpoints for documents.
+  - Extend metadata or services to parse PDFs or associate them with video IDs.
+
 ## Related Docs
 - `.agent/System/project_architecture.md`
 - `.agent/SOP/adding_api_endpoint.md`

@@ -1,9 +1,10 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.models import VideoDownloadRequest, VideoMetadata
 from app.downloader import VideoDownloader
 from app.storage import LocalStorage
+from app.document_storage import DocumentStorage
 from app.transcriber import ElevenLabsTranscriber
 import os
 
@@ -20,6 +21,7 @@ app.add_middleware(
 
 # Initialize storage, transcription, and downloader
 storage = LocalStorage(storage_dir="storage/videos", data_dir="data")
+document_storage = DocumentStorage(storage_dir="storage/documents", data_dir="data")
 transcriber = ElevenLabsTranscriber()
 downloader = VideoDownloader(storage, transcriber=transcriber)
 
@@ -125,6 +127,19 @@ async def delete_video(video_id: str):
         raise HTTPException(status_code=404, detail="Video not found")
     
     return {"status": "deleted", "video_id": video_id}
+
+@app.post("/api/documents/upload")
+async def upload_document(file: UploadFile = File(...)):
+    """Upload a PDF document (slides) and store it locally."""
+    if not file.filename.lower().endswith(".pdf") or file.content_type not in {
+        "application/pdf",
+        "application/octet-stream",
+    }:
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+    metadata = document_storage.save_document(file)
+    await file.close()
+    return {"status": "stored", "document": metadata}
 
 if __name__ == "__main__":
     import uvicorn

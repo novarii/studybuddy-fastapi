@@ -6,11 +6,12 @@ StudyBuddy FastAPI exposes a REST API that downloads Panopto videos, extracts MP
 ## Tech Stack & Structure
 - **Languages**: Python 3.11+
 - **Frameworks/Libraries**: FastAPI, Pydantic, Uvicorn, PanoptoDownloader, ffmpeg CLI, Requests, python-dotenv, ElevenLabs Speech-to-Text REST API, Agno AgentOS (in `chat.py`).
-- **Persistence**: Local filesystem (`storage/videos`, `storage/audio`) plus JSON metadata (`data/videos.json`). No relational DB.
+- **Persistence**: Local filesystem (`storage/videos`, `storage/audio`, `storage/documents`) plus JSON metadata (`data/videos.json`, `data/documents.json`). No relational DB.
 - **Key Modules**:
   - `app/main.py` – FastAPI app, routes, and dependency wiring.
   - `app/downloader.py` – `VideoDownloader` orchestrating downloads, ffmpeg conversion, and transcription.
-  - `app/storage.py` – `LocalStorage` managing file moves, metadata JSON, and housekeeping.
+  - `app/storage.py` – `LocalStorage` managing video/audio file moves, metadata JSON, and housekeeping.
+  - `app/document_storage.py` – PDF upload handling and metadata management.
   - `app/models.py` – Pydantic schemas for requests and stored metadata.
   - `app/transcriber.py` – ElevenLabs client wrapper that loads `.env.local` / `.env`.
   - `chat.py` – Optional Agno Agent FastAPI bootstrap.
@@ -22,10 +23,13 @@ app/
 ├── models.py
 ├── downloader.py
 ├── storage.py
-└── transcriber.py
+├── transcriber.py
+└── document_storage.py
 data/videos.json
+data/documents.json
 storage/videos/
 storage/audio/
+storage/documents/
 ```
 
 ## Core Workflows
@@ -43,6 +47,9 @@ storage/audio/
    - `GET /api/videos`, `/api/videos/{id}`, and `/api/videos/{id}/status` read from `VideoDownloader.downloads` plus persisted metadata.
 5. **Cleanup**
    - `DELETE /api/videos/{id}` removes MP4/MP3 files and metadata entries.
+6. **PDF Uploads**
+   - `POST /api/documents/upload` accepts a PDF `UploadFile`, validates MIME type/extension, and streams it to disk.
+   - `DocumentStorage.save_document` persists metadata into `data/documents.json` for later retrieval.
 
 ## External Integrations & Config
 - **PanoptoDownloader**: installed via `requirements.txt` (git dependency) and expects `yarl`, `multidict`, and `propcache` pre-installed (see requirements comments).
@@ -52,7 +59,9 @@ storage/audio/
   - Optional: `ELEVENLABS_MODEL_ID` (`scribe_v1` default), `ELEVENLABS_LANGUAGE_CODE`, `ELEVENLABS_DIARIZE`, `ELEVENLABS_TAG_AUDIO_EVENTS`.
 - **Agno AgentOS**: `chat.py` depends on `agno` packages (not listed in `requirements.txt` yet) for running conversational agents; it exposes its own FastAPI app if needed.
 
-## Metadata Schema (`data/videos.json`)
+## Metadata Schemas
+
+### `data/videos.json`
 Each `video_id` key stores:
 
 | Field | Description |
@@ -69,6 +78,16 @@ Each `video_id` key stores:
 | `transcript_status` | `completed`, `failed`, `skipped`, or `pending`. |
 | `transcript_error` | Human-readable transcription error (if any). |
 
+### `data/documents.json`
+| Field | Description |
+| --- | --- |
+| `document_id` | Auto-generated identifier (`doc_<timestamp>`). |
+| `original_filename` | Name provided during upload. |
+| `content_type` | MIME type (PDF enforced). |
+| `file_path` | Absolute path under `storage/documents`. |
+| `file_size` | Size in bytes. |
+| `uploaded_at` | ISO timestamp. |
+
 ## API Surface
 - `GET /api/health` – storage sanity check.
 - `POST /api/videos/download` – start job; returns `job_id` + `video_id`.
@@ -78,6 +97,7 @@ Each `video_id` key stores:
 - `GET /api/videos/{video_id}/status` – blend of live progress + persisted data.
 - `GET /api/videos/{video_id}/file` – download MP4.
 - `DELETE /api/videos/{video_id}` – remove files + metadata.
+- `POST /api/documents/upload` – upload PDF slide decks and persist metadata for later processing.
 
 ## Operational Notes
 - Background threads run per download; no central queue exists, so long-running ffmpeg/ElevenLabs calls may block additional throughput depending on system resources.
