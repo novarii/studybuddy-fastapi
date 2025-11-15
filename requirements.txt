@@ -6,6 +6,7 @@ requests~=2.27.1
 ffmpeg-progress-yield>=0.7.0
 pycryptodome>=3.19.0
 pycryptodomex>=3.19.0
+python-dotenv>=1.0.0
 # Note: yarl>=1.9.0 must be installed separately before PanoptoDownloader
 # because PanoptoDownloader requires yarl~=1.7.2 which doesn't build on Python 3.11+
 # Install with: pip install "yarl>=1.9.0" "multidict>=4.0" "propcache>=0.2.1" --no-deps

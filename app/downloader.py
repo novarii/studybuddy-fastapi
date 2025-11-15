@@ -6,10 +6,12 @@ from datetime import datetime
 from typing import Optional
 import PanoptoDownloader
 from PanoptoDownloader.exceptions import *
+from app.transcriber import ElevenLabsTranscriber
 
 class VideoDownloader:
-    def __init__(self, storage):
+    def __init__(self, storage, transcriber: Optional[ElevenLabsTranscriber] = None):
         self.storage = storage
+        self.transcriber = transcriber
         self.downloads = {}  # Track active downloads
     
     def download_video(self, stream_url: str, video_id: str, title: Optional[str] = None, 
@@ -29,7 +31,9 @@ class VideoDownloader:
                 "status": "completed",
                 "progress": 100,
                 "file_path": existing_video.get("file_path"),
-                "audio_path": existing_video.get("audio_path")
+                "audio_path": existing_video.get("audio_path"),
+                "transcript": existing_video.get("transcript"),
+                "transcript_status": existing_video.get("transcript_status"),
             }
             return job_id
         
@@ -45,7 +49,9 @@ class VideoDownloader:
         self.downloads[job_id] = {
             "status": "downloading",
             "progress": 0,
-            "audio_path": None
+            "audio_path": None,
+            "transcript_status": "pending" if self.transcriber else None,
+            "transcript": None,
         }
         
         # Start download in background thread
@@ -81,21 +87,31 @@ class VideoDownloader:
                 file_path="",  # Will be set by storage
                 file_size=0,   # Will be set by storage
                 uploaded_at=datetime.now().isoformat(),
-                status="completed"
+                status="completed",
+                transcript_status="pending" if self.transcriber else None
             )
             
             file_path = self.storage.store_video(temp_file, video_id, metadata)
             audio_path = None
             if audio_temp_file:
                 audio_path = self.storage.store_audio(audio_temp_file, video_id)
-                metadata.audio_path = audio_path
+            
+            transcript_info = None
+            if self.transcriber and audio_path:
+                transcript_info = self._transcribe_audio(video_id, audio_path)
+            elif not self.transcriber:
+                self.storage.update_metadata(video_id, transcript_status="skipped")
             
             # Update status
             self.downloads[video_id] = {
                 "status": "completed",
                 "progress": 100,
                 "file_path": file_path,
-                "audio_path": audio_path
+                "audio_path": audio_path,
+                "transcript_status": (transcript_info or {}).get("status") if transcript_info else (
+                    "skipped" if not self.transcriber else "pending"
+                ),
+                "transcript": (transcript_info or {}).get("text"),
             }
             
         except RegexNotMatch:
@@ -162,17 +178,15 @@ class VideoDownloader:
             "status": "failed",
             "progress": 0,
             "error": error_msg,
-            "audio_path": None
+            "audio_path": None,
+            "transcript_status": None,
+            "transcript": None,
         }
         
         # Also update metadata if it exists
         video = self.storage.get_video(video_id)
         if video:
-            from app.models import VideoMetadata
-            metadata = VideoMetadata(**video)
-            metadata.status = "failed"
-            metadata.error = error_msg
-            # Update in storage (you'd need to add an update method)
+            self.storage.update_metadata(video_id, status="failed", error=error_msg)
     
     def get_status(self, video_id: str) -> dict:
         """Get download status"""
@@ -187,7 +201,9 @@ class VideoDownloader:
                 "status": video["status"],
                 "progress": 100 if video["status"] == "completed" else 0,
                 "file_path": video["file_path"],
-                "audio_path": video.get("audio_path")
+                "audio_path": video.get("audio_path"),
+                "transcript": video.get("transcript"),
+                "transcript_status": video.get("transcript_status"),
             }
         
         return {"status": "not_found"}
@@ -212,3 +228,23 @@ class VideoDownloader:
                 f"ffmpeg audio extraction failed for {video_id}: {result.stderr.decode('utf-8', 'ignore')}"
             )
         return audio_temp_file
+
+    def _transcribe_audio(self, video_id: str, audio_path: str) -> Optional[dict]:
+        """Run audio through ElevenLabs transcription and persist metadata."""
+        if not self.transcriber:
+            return None
+        try:
+            result = self.transcriber.transcribe(audio_path)
+        except Exception as exc:
+            result = {
+                "status": "failed",
+                "text": None,
+                "error": str(exc),
+            }
+        self.storage.update_metadata(
+            video_id,
+            transcript=result.get("text"),
+            transcript_status=result.get("status"),
+            transcript_error=result.get("error"),
+        )
+        return result

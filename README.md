@@ -6,6 +6,7 @@ A FastAPI-based REST API for downloading videos from Panopto streaming URLs.
 
 - Download videos from Panopto stream URLs
 - Extract audio tracks (MP3 via ffmpeg) alongside each download
+- Transcribe audio tracks to text through the ElevenLabs Speech-to-Text API
 - Track download progress and status
 - List and manage downloaded videos
 - RESTful API with CORS support
@@ -66,6 +67,16 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 # Install dependencies
 uv pip install -r requirements.txt
 ```
+
+### Environment Variables
+
+Create a `.env.local` (or `.env`) file at the project root and define the ElevenLabs API key:
+
+```
+ELEVENLABS_API_KEY=your_elevenlabs_key
+```
+
+Optional overrides include `ELEVENLABS_MODEL_ID`, `ELEVENLABS_LANGUAGE_CODE`, `ELEVENLABS_DIARIZE`, and `ELEVENLABS_TAG_AUDIO_EVENTS`. Restart the API server any time you change these values.
 
 ## Running the Server
 
@@ -152,7 +163,8 @@ studybuddy-fastapi/
 │   ├── main.py          # FastAPI application and routes
 │   ├── models.py        # Pydantic models
 │   ├── downloader.py    # Video download logic
-│   └── storage.py       # Local storage management
+│   ├── storage.py       # Local storage management
+│   └── transcriber.py   # ElevenLabs speech-to-text integration
 ├── storage/
 │   ├── videos/          # Downloaded video files
 │   └── audio/           # Extracted audio files (mp3)
@@ -169,5 +181,5 @@ The server runs with auto-reload enabled when using the `--reload` flag, so chan
 
 - Videos are stored in the `storage/videos/` directory
 - Audio-only files are stored in `storage/audio/` and share the same `video_id` filename
-- Metadata is stored in the `data/` directory
+- Metadata (including transcript text/status) is stored in `data/videos.json`
 - CORS is enabled for all origins (configure appropriately for production)

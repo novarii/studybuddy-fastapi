@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.models import VideoDownloadRequest, VideoMetadata
 from app.downloader import VideoDownloader
 from app.storage import LocalStorage
+from app.transcriber import ElevenLabsTranscriber
 import os
 
 app = FastAPI(title="Panopto Video Downloader API")
@@ -17,9 +18,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize storage and downloader
+# Initialize storage, transcription, and downloader
 storage = LocalStorage(storage_dir="storage/videos", data_dir="data")
-downloader = VideoDownloader(storage)
+transcriber = ElevenLabsTranscriber()
+downloader = VideoDownloader(storage, transcriber=transcriber)
 
 @app.get("/")
 async def root():

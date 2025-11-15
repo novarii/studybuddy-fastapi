@@ -19,3 +19,6 @@ class VideoMetadata(BaseModel):
     status: str  # "downloading", "completed", "failed"
     error: Optional[str] = None
     audio_path: Optional[str] = None
+    transcript: Optional[str] = None
+    transcript_status: Optional[str] = None
+    transcript_error: Optional[str] = None

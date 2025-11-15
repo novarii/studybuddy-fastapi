@@ -68,7 +68,10 @@ class LocalStorage:
             "uploaded_at": metadata.uploaded_at,
             "status": metadata.status,
             "error": metadata.error,
-            "audio_path": metadata.audio_path
+            "audio_path": metadata.audio_path,
+            "transcript": metadata.transcript,
+            "transcript_status": metadata.transcript_status,
+            "transcript_error": metadata.transcript_error,
         }
         self._save_metadata(metadata_dict)
         
@@ -87,22 +90,18 @@ class LocalStorage:
         else:
             raise FileNotFoundError(f"Temp audio file not found: {temp_file_path}")
 
-        metadata = self._load_metadata()
-        entry = metadata.get(video_id, {
-            "video_id": video_id,
-            "title": None,
-            "source_url": None,
-            "file_path": "",
-            "file_size": 0,
-            "uploaded_at": "",
-            "status": "completed",
-            "error": None,
-        })
-        entry["audio_path"] = str(destination)
-        metadata[video_id] = entry
-        self._save_metadata(metadata)
+        self.update_metadata(video_id, audio_path=str(destination))
 
         return str(destination)
+
+    def update_metadata(self, video_id: str, **updates) -> bool:
+        """Update stored metadata fields for a given video."""
+        metadata = self._load_metadata()
+        if video_id not in metadata:
+            return False
+        metadata[video_id].update(updates)
+        self._save_metadata(metadata)
+        return True
     
     def get_video(self, video_id: str) -> Optional[Dict]:
         """Get video metadata by ID"""
@@ -121,10 +120,15 @@ class LocalStorage:
         if video_id not in metadata:
             return False
         
-        # Delete file
-        file_path = Path(metadata[video_id]["file_path"])
+        # Delete files
+        file_path = Path(metadata[video_id].get("file_path", ""))
         if file_path.exists():
             file_path.unlink()
+        audio_path = metadata[video_id].get("audio_path")
+        if audio_path:
+            audio_file = Path(audio_path)
+            if audio_file.exists():
+                audio_file.unlink()
         
         # Remove from metadata
         del metadata[video_id]
