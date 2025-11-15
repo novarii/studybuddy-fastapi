@@ -6,14 +6,16 @@ from typing import Optional, List, Dict
 from app.models import VideoMetadata
 
 class LocalStorage:
-    def __init__(self, storage_dir: str = "storage/videos", data_dir: str = "data"):
+    def __init__(self, storage_dir: str = "storage/videos", data_dir: str = "data", audio_dir: str = "storage/audio"):
         self.storage_dir = Path(storage_dir)
         self.data_dir = Path(data_dir)
+        self.audio_dir = Path(audio_dir)
         self.metadata_file = self.data_dir / "videos.json"
         
         # Create directories if they don't exist
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.audio_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize metadata file if it doesn't exist
         if not self.metadata_file.exists():
@@ -65,10 +67,41 @@ class LocalStorage:
             "file_size": file_size,
             "uploaded_at": metadata.uploaded_at,
             "status": metadata.status,
-            "error": metadata.error
+            "error": metadata.error,
+            "audio_path": metadata.audio_path
         }
         self._save_metadata(metadata_dict)
         
+        return str(destination)
+
+    def store_audio(self, temp_file_path: str, video_id: str) -> str:
+        """Move extracted audio to storage/audio and update metadata"""
+        filename = f"{video_id}.mp3"
+        destination = self.audio_dir / filename
+
+        if destination.exists():
+            destination.unlink()
+
+        if os.path.exists(temp_file_path):
+            shutil.move(temp_file_path, destination)
+        else:
+            raise FileNotFoundError(f"Temp audio file not found: {temp_file_path}")
+
+        metadata = self._load_metadata()
+        entry = metadata.get(video_id, {
+            "video_id": video_id,
+            "title": None,
+            "source_url": None,
+            "file_path": "",
+            "file_size": 0,
+            "uploaded_at": "",
+            "status": "completed",
+            "error": None,
+        })
+        entry["audio_path"] = str(destination)
+        metadata[video_id] = entry
+        self._save_metadata(metadata)
+
         return str(destination)
     
     def get_video(self, video_id: str) -> Optional[Dict]:

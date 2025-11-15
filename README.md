@@ -5,6 +5,7 @@ A FastAPI-based REST API for downloading videos from Panopto streaming URLs.
 ## Features
 
 - Download videos from Panopto stream URLs
+- Extract audio tracks (MP3 via ffmpeg) alongside each download
 - Track download progress and status
 - List and manage downloaded videos
 - RESTful API with CORS support
@@ -153,7 +154,8 @@ studybuddy-fastapi/
 │   ├── downloader.py    # Video download logic
 │   └── storage.py       # Local storage management
 ├── storage/
-│   └── videos/          # Downloaded video files
+│   ├── videos/          # Downloaded video files
+│   └── audio/           # Extracted audio files (mp3)
 ├── data/                # Metadata and data files
 ├── requirements.txt     # Python dependencies
 └── README.md           # This file
@@ -166,6 +168,6 @@ The server runs with auto-reload enabled when using the `--reload` flag, so chan
 ## Notes
 
 - Videos are stored in the `storage/videos/` directory
+- Audio-only files are stored in `storage/audio/` and share the same `video_id` filename
 - Metadata is stored in the `data/` directory
 - CORS is enabled for all origins (configure appropriately for production)
-

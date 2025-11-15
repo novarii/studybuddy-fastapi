@@ -6,3 +6,4 @@ storage/*
 !storage/.gitkeep
 data/*
 !data/.gitkeep
+.env.local

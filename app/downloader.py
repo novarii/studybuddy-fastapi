@@ -1,8 +1,9 @@
 import os
+import subprocess
 import tempfile
 import threading
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Optional
 import PanoptoDownloader
 from PanoptoDownloader.exceptions import *
 
@@ -27,7 +28,8 @@ class VideoDownloader:
             self.downloads[job_id] = {
                 "status": "completed",
                 "progress": 100,
-                "file_path": existing_video.get("file_path")
+                "file_path": existing_video.get("file_path"),
+                "audio_path": existing_video.get("audio_path")
             }
             return job_id
         
@@ -42,7 +44,8 @@ class VideoDownloader:
         # Mark as downloading
         self.downloads[job_id] = {
             "status": "downloading",
-            "progress": 0
+            "progress": 0,
+            "audio_path": None
         }
         
         # Start download in background thread
@@ -58,6 +61,7 @@ class VideoDownloader:
     def _download_worker(self, stream_url: str, temp_file: str, video_id: str, 
                         title: Optional[str], source_url: Optional[str]):
         """Background worker to download and store video"""
+        audio_temp_file = None
         try:
             # Progress callback
             def progress_callback(progress: int):
@@ -66,6 +70,7 @@ class VideoDownloader:
             
             # Download to temp file
             PanoptoDownloader.download(stream_url, temp_file, progress_callback)
+            audio_temp_file = self._convert_to_audio(temp_file, video_id)
             
             # Store video
             from app.models import VideoMetadata
@@ -80,12 +85,17 @@ class VideoDownloader:
             )
             
             file_path = self.storage.store_video(temp_file, video_id, metadata)
+            audio_path = None
+            if audio_temp_file:
+                audio_path = self.storage.store_audio(audio_temp_file, video_id)
+                metadata.audio_path = audio_path
             
             # Update status
             self.downloads[video_id] = {
                 "status": "completed",
                 "progress": 100,
-                "file_path": file_path
+                "file_path": file_path,
+                "audio_path": audio_path
             }
             
         except RegexNotMatch:
@@ -139,13 +149,20 @@ class VideoDownloader:
                     os.unlink(temp_file)
                 except:
                     pass
+        finally:
+            if audio_temp_file and os.path.exists(audio_temp_file):
+                try:
+                    os.unlink(audio_temp_file)
+                except:
+                    pass
     
     def _handle_error(self, video_id: str, error_msg: str):
         """Handle download errors"""
         self.downloads[video_id] = {
             "status": "failed",
             "progress": 0,
-            "error": error_msg
+            "error": error_msg,
+            "audio_path": None
         }
         
         # Also update metadata if it exists
@@ -169,7 +186,29 @@ class VideoDownloader:
             return {
                 "status": video["status"],
                 "progress": 100 if video["status"] == "completed" else 0,
-                "file_path": video["file_path"]
+                "file_path": video["file_path"],
+                "audio_path": video.get("audio_path")
             }
         
         return {"status": "not_found"}
+
+    def _convert_to_audio(self, video_path: str, video_id: str) -> Optional[str]:
+        """Use ffmpeg to extract audio from the downloaded video"""
+        temp_dir = tempfile.gettempdir()
+        audio_temp_file = os.path.join(
+            temp_dir, f"panopto_{video_id}_{datetime.now().strftime('%f')}.mp3"
+        )
+        cmd = [
+            "ffmpeg",
+            "-y",  # overwrite if exists
+            "-i", video_path,
+            "-vn",
+            "-acodec", "mp3",
+            audio_temp_file,
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"ffmpeg audio extraction failed for {video_id}: {result.stderr.decode('utf-8', 'ignore')}"
+            )
+        return audio_temp_file
