@@ -6,12 +6,13 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Literal, Optional, Sequence, Tuple
+from typing import Dict, Iterator, List, Literal, Optional, Sequence, Tuple
 
 from agno.agent import Agent
 from agno.knowledge.document.base import Document
 from agno.knowledge.knowledge import Knowledge
 from agno.models.openai import OpenAIChat
+from agno.run.agent import RunOutputEvent
 from agno.vectordb.chroma import ChromaDb
 from dotenv import load_dotenv
 
@@ -81,6 +82,25 @@ class StudyBuddyChatAgent:
         reply = self._normalize_content(run_output.content)
         references = self._normalize_references(run_output.references)
         return ChatAgentResult(reply=reply, source=source, references=references)
+
+    def stream_response(
+        self,
+        *,
+        message: str,
+        source: Literal["lectures", "slides", "combined"] = "combined",
+        user_id: Optional[str] = None,
+    ) -> Iterator[RunOutputEvent]:
+        filters: Dict[str, str] = {}
+        if user_id:
+            filters["user_id"] = user_id
+        stream = self.agent.run(
+            message,
+            knowledge_filters=filters or None,
+            source=source,
+            stream=True,
+            stream_events=True,
+        )
+        return stream  # Iterator[RunOutputEvent]
 
     # ------------------------------------------------------------------ #
     # Helpers

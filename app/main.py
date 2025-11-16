@@ -1,8 +1,10 @@
 import sqlite3
 from pathlib import Path
 
+import json
+
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.models import (
     VideoDownloadRequest,
@@ -19,6 +21,7 @@ from app.pdf_slide_description_agent import PDFSlideDescriptionAgent
 from app.database import CourseDatabase
 from app.chroma_ingestion import ChromaIngestionService
 from app.chat_agent import StudyBuddyChatAgent
+from agno.run.agent import RunEvent
 
 app = FastAPI(title="Panopto Video Downloader API")
 
@@ -270,6 +273,31 @@ async def chat_endpoint(request: ChatRequest):
         source=result.source,
         references=result.references,
     )
+
+
+@app.post("/api/chat/stream")
+async def chat_stream_endpoint(request: ChatRequest):
+    """Stream chat responses chunk-by-chunk using server-sent events."""
+
+    def event_generator():
+        try:
+            stream = chat_agent.stream_response(
+                message=request.message,
+                source=request.source,
+                user_id=request.user_id,
+            )
+            for chunk in stream:
+                payload = {"event": chunk.event}
+                if getattr(chunk, "content", None) is not None:
+                    payload["content"] = str(chunk.content)
+                if getattr(chunk, "tools", None):
+                    payload["tools"] = [tool.__dict__ for tool in chunk.tools]
+                yield f"data: {json.dumps(payload)}\n\n"
+        except Exception as exc:
+            error_payload = {"event": "error", "message": str(exc)}
+            yield f"data: {json.dumps(error_payload)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 def process_document_pipeline(document_id: str) -> None:

@@ -107,6 +107,7 @@ Helper methods `link_lecture`, `link_document`, `list_lectures_for_course`, and 
 - `POST /api/documents/upload` – ingest slide PDFs; immediately schedules the slide-description agent + Chroma ingestion in a FastAPI background task.
 - `POST /api/documents/{document_id}/slides/describe` – run the Gemini slide agent and persist results.
 - `POST /api/chat` – client-facing endpoint that relays prompts to the Agno chat agent backed by Chroma knowledge. `source` accepts `"lectures"`, `"slides"`, or `"combined"` (default) so one question can pull from both datasets.
+- `POST /api/chat/stream` – SSE endpoint that streams incremental chunks (events `RunContent`/`RunContentCompleted`) for live typing experiences in the frontend.
 
 ## External Integrations & Config
 - **PanoptoDownloader** – pulled via `requirements.txt`; ensure `yarl`, `multidict`, and `propcache` install cleanly on Python 3.11.
