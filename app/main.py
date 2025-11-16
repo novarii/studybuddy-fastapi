@@ -4,7 +4,13 @@ from pathlib import Path
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from app.models import VideoDownloadRequest, VideoMetadata, CourseCreateRequest
+from app.models import (
+    VideoDownloadRequest,
+    VideoMetadata,
+    CourseCreateRequest,
+    ChatRequest,
+    ChatResponse,
+)
 from app.downloader import VideoDownloader
 from app.storage import LocalStorage
 from app.document_storage import DocumentStorage
@@ -12,6 +18,7 @@ from app.transcriber import ElevenLabsTranscriber
 from app.pdf_slide_description_agent import PDFSlideDescriptionAgent
 from app.database import CourseDatabase
 from app.chroma_ingestion import ChromaIngestionService
+from app.chat_agent import StudyBuddyChatAgent
 
 app = FastAPI(title="Panopto Video Downloader API")
 
@@ -32,6 +39,7 @@ chroma_ingestor = ChromaIngestionService(storage=storage, document_storage=docum
 downloader = VideoDownloader(storage, transcriber=transcriber, ingestion_service=chroma_ingestor)
 pdf_slide_agent = PDFSlideDescriptionAgent()
 course_db = CourseDatabase()
+chat_agent = StudyBuddyChatAgent(config=chroma_ingestor.config)
 
 @app.get("/")
 async def root():
@@ -242,6 +250,27 @@ async def list_courses():
     """List all available courses."""
     rows = course_db.list_courses()
     return {"courses": [dict(row) for row in rows], "count": len(rows)}
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat_endpoint(request: ChatRequest):
+    """Chat with the Agno agent backed by Chroma knowledge."""
+    try:
+        result = chat_agent.respond(
+            message=request.message,
+            source=request.source,
+            user_id=request.user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return ChatResponse(
+        reply=result.reply,
+        source=result.source,
+        references=result.references,
+    )
+
 
 def process_document_pipeline(document_id: str) -> None:
     """Background pipeline to describe slides and ingest them into Chroma."""

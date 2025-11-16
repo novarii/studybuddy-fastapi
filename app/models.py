@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime
 
 class VideoDownloadRequest(BaseModel):
@@ -33,3 +33,15 @@ class VideoMetadata(BaseModel):
 
 class CourseCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(..., min_length=1)
+    source: Literal["lectures", "slides", "combined"] = "combined"
+    user_id: Optional[str] = None
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    source: Literal["lectures", "slides", "combined"]
+    references: Optional[List[Dict[str, Any]]] = None

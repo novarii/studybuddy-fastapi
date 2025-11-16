@@ -106,6 +106,7 @@ Helper methods `link_lecture`, `link_document`, `list_lectures_for_course`, and 
 - `DELETE /api/videos/{video_id}` – remove media + metadata.
 - `POST /api/documents/upload` – ingest slide PDFs; immediately schedules the slide-description agent + Chroma ingestion in a FastAPI background task.
 - `POST /api/documents/{document_id}/slides/describe` – run the Gemini slide agent and persist results.
+- `POST /api/chat` – client-facing endpoint that relays prompts to the Agno chat agent backed by Chroma knowledge. `source` accepts `"lectures"`, `"slides"`, or `"combined"` (default) so one question can pull from both datasets.
 
 ## External Integrations & Config
 - **PanoptoDownloader** – pulled via `requirements.txt`; ensure `yarl`, `multidict`, and `propcache` install cleanly on Python 3.11.
@@ -129,6 +130,7 @@ These strategies ensure every chunk stored in Chroma (or another vector DB) stay
 ### Chroma Ingestion
 - `app/chroma_ingestion.py` exposes `ChromaIngestionService`, which loads `.env.local`, converts `Document` chunks into Agno `Knowledge.add_contents` payloads, and sanitizes metadata (no `course_id` is written to Chroma—only `lecture_id` or `document_id`, chunk counters, and optional `user_id` remain).
 - The service is instantiated inside `app/main.py`, so completed ElevenLabs transcripts and uploaded PDFs automatically flow into Chroma without manual calls.
+- `app/chat_agent.py` wires a `StudyBuddyChatAgent` (Agno `Agent` + `OpenAIChat`) that uses a custom `knowledge_retriever` to merge lecture and slide searches in a single tool call. The FastAPI route exposes a thin wrapper returning markdown replies plus optional references (with `knowledge_source` metadata).
 - `scripts/ingest_chroma.py` is now a thin CLI wrapper around the shared service. Provide `--course-id`, `--user-id`, optional `--lectures` and `--documents`, plus the desired `--chroma-path`, `--lecture-collection`, and `--slide-collection`. The script prints how many chunks land in each collection for manual backfills or smoke tests.
 
 ## Related Docs
