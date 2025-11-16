@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,6 +8,7 @@ from app.downloader import VideoDownloader
 from app.storage import LocalStorage
 from app.document_storage import DocumentStorage
 from app.transcriber import ElevenLabsTranscriber
+from app.pdf_slide_description_agent import PDFSlideDescriptionAgent
 import os
 
 app = FastAPI(title="Panopto Video Downloader API")
@@ -24,6 +27,7 @@ storage = LocalStorage(storage_dir="storage/videos", data_dir="data")
 document_storage = DocumentStorage(storage_dir="storage/documents", data_dir="data")
 transcriber = ElevenLabsTranscriber()
 downloader = VideoDownloader(storage, transcriber=transcriber)
+pdf_slide_agent = PDFSlideDescriptionAgent()
 
 @app.get("/")
 async def root():
@@ -140,6 +144,40 @@ async def upload_document(file: UploadFile = File(...)):
     metadata = document_storage.save_document(file)
     await file.close()
     return {"status": "stored", "document": metadata}
+
+
+@app.post("/api/documents/{document_id}/slides/describe")
+async def describe_document_slides(document_id: str):
+    """Generate structured slide descriptions for an uploaded PDF."""
+    document = document_storage.get_document(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    pdf_path = Path(document.get("file_path", ""))
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="PDF file not found on disk")
+
+    try:
+        descriptions = pdf_slide_agent.process_pdf(pdf_path=pdf_path)
+    except HTTPException:
+        raise
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    description_payload = [desc.model_dump() for desc in descriptions]
+    descriptions_path = document_storage.save_slide_descriptions(
+        document_id=document_id,
+        descriptions=description_payload,
+    )
+
+    return {
+        "document_id": document_id,
+        "pages_processed": len(description_payload),
+        "descriptions_path": str(descriptions_path),
+        "descriptions": description_payload,
+    }
 
 if __name__ == "__main__":
     import uvicorn

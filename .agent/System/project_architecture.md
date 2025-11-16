@@ -14,6 +14,9 @@ StudyBuddy FastAPI exposes a REST API that downloads Panopto videos, extracts MP
   - `app/document_storage.py` – PDF upload handling and metadata management.
   - `app/models.py` – Pydantic schemas for requests and stored metadata.
   - `app/transcriber.py` – ElevenLabs client wrapper that loads `.env.local` / `.env`.
+  - `app/chunking.py` – Timestamp-aware Agno chunking strategy built on ElevenLabs word metadata.
+  - `scripts/manual_transcribe.py` – Local helper script to call ElevenLabs on arbitrary audio/video clips and inspect timestamp segments.
+  - `tests/test_chunking.py` – Pytest coverage that exercises the chunker’s timestamp + fallback paths.
   - `chat.py` – Optional Agno Agent FastAPI bootstrap.
 
 Directory layout:
@@ -77,6 +80,7 @@ Each `video_id` key stores:
 | `transcript` | Text returned by ElevenLabs (may be `null`). |
 | `transcript_status` | `completed`, `failed`, `skipped`, or `pending`. |
 | `transcript_error` | Human-readable transcription error (if any). |
+| `transcript_segments` | List of `{text, start_ms, end_ms, confidence, speaker?}` tokens produced by ElevenLabs for downstream semantic search. |
 
 ### `data/documents.json`
 | Field | Description |
@@ -104,6 +108,22 @@ Each `video_id` key stores:
 - `LocalStorage.update_metadata` rewrites the JSON file per change; keep file sizes manageable or migrate to a DB if scaling up.
 - Ensure `.gitignore` keeps `storage/` and `data/videos.json` out of version control to avoid leaking media.
 - If ElevenLabs transcription fails, downloads still succeed with `transcript_status="failed"` and error details saved for debugging.
+- `scripts/manual_transcribe.py` reuses `VideoDownloader` + `ElevenLabsTranscriber` to validate credentials and timestamp payloads without triggering Panopto downloads.
+- Run `pytest` (after installing `pytest` + `agno`) to execute `tests/test_chunking.py` and guard against regressions in timestamp-aware chunking.
+
+## Transcription Metadata & Agno Chunking
+
+ElevenLabs returns word-level timestamps; `app/transcriber.py` now normalizes those into `transcript_segments` so the system can:
+
+1. **Inspect timestamps quickly** – `python scripts/manual_transcribe.py <path/to/clip>` prints transcript text plus sample `[start_ms -> end_ms]` entries, making it easy to confirm metadata before ingestion.
+2. **Chunk for semantic search** – `TimestampAwareChunking` (in `app/chunking.py`) consumes `Document` objects whose `meta_data["segments"]` references `transcript_segments`. It:
+   - Cuts chunks when `max_words` or `max_duration_ms` is exceeded.
+   - Preserves an `overlap_ms` tail for continuity.
+   - Annotates each chunk’s metadata with `start_ms`, `end_ms`, and `chunk_index`.
+   - Falls back to simple word-count splitting when timestamp metadata is absent (legacy transcripts).
+3. **Test coverage** – `tests/test_chunking.py` verifies both timestamped and fallback chunk output; run `pytest` after modifying chunking parameters or metadata shape.
+
+This metadata enables Agno Knowledge (or any vector store) to return relevant transcript snippets plus the exact millisecond offsets required for frontend deep links.
 
 ## Related Docs
 - `.agent/SOP/adding_api_endpoint.md`

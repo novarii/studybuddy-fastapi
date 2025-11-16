@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from fastapi import UploadFile
 
@@ -53,6 +53,31 @@ class DocumentStorage:
     def list_documents(self) -> Dict[str, Dict]:
         """Return all stored documents metadata."""
         return self._load_metadata()
+
+    def get_document(self, document_id: str) -> Optional[Dict]:
+        """Fetch metadata for a specific document if it exists."""
+        metadata = self._load_metadata()
+        return metadata.get(document_id)
+
+    def save_slide_descriptions(self, document_id: str, descriptions: List[Dict]) -> Path:
+        """Persist slide descriptions to disk and update metadata."""
+        descriptions_dir = self.data_dir / "document_descriptions"
+        descriptions_dir.mkdir(parents=True, exist_ok=True)
+        output_path = descriptions_dir / f"{document_id}_slides.json"
+
+        with output_path.open("w", encoding="utf-8") as fh:
+            json.dump(descriptions, fh, indent=2, ensure_ascii=False)
+
+        metadata = self._load_metadata()
+        if document_id in metadata:
+            metadata[document_id]["slide_descriptions_path"] = str(output_path)
+            metadata[document_id][
+                "slide_descriptions_updated_at"
+            ] = datetime.now().isoformat()
+            metadata[document_id]["slide_page_count"] = len(descriptions)
+            self._save_metadata(metadata)
+
+        return output_path
 
     def _load_metadata(self) -> Dict[str, Dict]:
         try:
