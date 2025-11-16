@@ -178,6 +178,23 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
     return {"status": "stored", "document": metadata, "processing": "queued"}
 
 
+@app.get("/api/documents")
+async def list_documents():
+    """List metadata for all stored PDF documents."""
+    metadata = document_storage.list_documents()
+    documents = list(metadata.values())
+    return {"documents": documents, "count": len(documents)}
+
+
+@app.get("/api/documents/{document_id}")
+async def get_document(document_id: str):
+    """Fetch metadata for a specific stored document."""
+    document = document_storage.get_document(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return document
+
+
 @app.post("/api/documents/{document_id}/slides/describe")
 async def describe_document_slides(document_id: str):
     """Generate structured slide descriptions for an uploaded PDF."""

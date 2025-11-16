@@ -132,6 +132,9 @@ Once the server is running, you can access:
 
 ### Document Management
 - `POST /api/documents/upload` - Upload PDF slides; file is saved under `storage/documents/` and metadata recorded in `data/documents.json`
+- `GET /api/documents` - List metadata for every stored PDF (document ID, filename, paths, slide description details)
+- `GET /api/documents/{document_id}` - Retrieve metadata for a single stored document
+- `DELETE /api/documents/{document_id}` - Remove a PDF and any slide descriptions on disk
 
 ### Course Management
 - `POST /api/courses` - Create a course record in SQLite (`course_id` returned)
