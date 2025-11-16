@@ -1,14 +1,16 @@
+import sqlite3
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from app.models import VideoDownloadRequest, VideoMetadata
+from app.models import VideoDownloadRequest, VideoMetadata, CourseCreateRequest
 from app.downloader import VideoDownloader
 from app.storage import LocalStorage
 from app.document_storage import DocumentStorage
 from app.transcriber import ElevenLabsTranscriber
 from app.pdf_slide_description_agent import PDFSlideDescriptionAgent
+from app.database import CourseDatabase
 import os
 
 app = FastAPI(title="Panopto Video Downloader API")
@@ -28,6 +30,7 @@ document_storage = DocumentStorage(storage_dir="storage/documents", data_dir="da
 transcriber = ElevenLabsTranscriber()
 downloader = VideoDownloader(storage, transcriber=transcriber)
 pdf_slide_agent = PDFSlideDescriptionAgent()
+course_db = CourseDatabase()
 
 @app.get("/")
 async def root():
@@ -51,6 +54,18 @@ async def download_video(request: VideoDownloadRequest):
         # Validate stream URL
         if not request.stream_url:
             raise HTTPException(status_code=400, detail="stream_url is required")
+
+        if not request.course_id:
+            raise HTTPException(status_code=400, detail="course_id is required")
+
+        course = course_db.get_course(request.course_id)
+        if not course:
+            raise HTTPException(status_code=404, detail="Course not found")
+
+        # Prefer canonical course name from DB if available
+        course_name = request.course_name or course["name"]
+        if course["name"] and course["name"] != course_name:
+            course_name = course["name"]
         
         # Generate video_id if not provided
         video_id = request.video_id
@@ -63,14 +78,18 @@ async def download_video(request: VideoDownloadRequest):
             stream_url=request.stream_url,
             video_id=video_id,
             title=request.title,
-            source_url=request.source_url
+            source_url=request.source_url,
+            course_id=request.course_id,
+            course_name=course_name,
         )
         
         return {
             "status": "accepted",
             "job_id": job_id,
             "video_id": video_id,
-            "message": "Video download started"
+            "message": "Video download started",
+            "course_id": request.course_id,
+            "course_name": course_name,
         }
     
     except Exception as e:
@@ -178,6 +197,34 @@ async def describe_document_slides(document_id: str):
         "descriptions_path": str(descriptions_path),
         "descriptions": description_payload,
     }
+
+
+@app.post("/api/courses")
+async def create_course(request: CourseCreateRequest):
+    """Create a new course entry before uploading lectures."""
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Course name cannot be empty")
+
+    from datetime import datetime
+
+    course_id = f"course_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+
+    try:
+        course_db.create_course(course_id=course_id, name=name)
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=400, detail="Course ID already exists") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {"course": {"id": course_id, "name": name}}
+
+
+@app.get("/api/courses")
+async def list_courses():
+    """List all available courses."""
+    rows = course_db.list_courses()
+    return {"courses": [dict(row) for row in rows], "count": len(rows)}
 
 if __name__ == "__main__":
     import uvicorn

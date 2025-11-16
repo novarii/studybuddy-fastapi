@@ -14,8 +14,15 @@ class VideoDownloader:
         self.transcriber = transcriber
         self.downloads = {}  # Track active downloads
     
-    def download_video(self, stream_url: str, video_id: str, title: Optional[str] = None, 
-                      source_url: Optional[str] = None) -> str:
+    def download_video(
+        self,
+        stream_url: str,
+        video_id: str,
+        title: Optional[str] = None,
+        source_url: Optional[str] = None,
+        course_id: Optional[str] = None,
+        course_name: Optional[str] = None,
+    ) -> str:
         """
         Download video from stream URL to local storage
         Returns job_id for tracking
@@ -54,20 +61,30 @@ class VideoDownloader:
             "transcript_status": "pending" if self.transcriber else None,
             "transcript": None,
             "transcript_segments": None,
+            "course_id": course_id,
+            "course_name": course_name,
         }
         
         # Start download in background thread
         thread = threading.Thread(
             target=self._download_worker,
-            args=(stream_url, temp_file_path, job_id, title, source_url)
+            args=(stream_url, temp_file_path, job_id, title, source_url, course_id, course_name)
         )
         thread.daemon = True
         thread.start()
         
         return job_id
     
-    def _download_worker(self, stream_url: str, temp_file: str, video_id: str, 
-                        title: Optional[str], source_url: Optional[str]):
+    def _download_worker(
+        self,
+        stream_url: str,
+        temp_file: str,
+        video_id: str,
+        title: Optional[str],
+        source_url: Optional[str],
+        course_id: Optional[str],
+        course_name: Optional[str],
+    ):
         """Background worker to download and store video"""
         audio_temp_file = None
         try:
@@ -86,6 +103,8 @@ class VideoDownloader:
                 video_id=video_id,
                 title=title,
                 source_url=source_url,
+                course_id=course_id,
+                course_name=course_name,
                 file_path="",  # Will be set by storage
                 file_size=0,   # Will be set by storage
                 uploaded_at=datetime.now().isoformat(),
@@ -115,6 +134,8 @@ class VideoDownloader:
                 ),
                 "transcript": (transcript_info or {}).get("text"),
                 "transcript_segments": (transcript_info or {}).get("segments"),
+                "course_id": course_id,
+                "course_name": course_name,
             }
             
         except RegexNotMatch:
@@ -135,6 +156,8 @@ class VideoDownloader:
                         video_id=video_id,
                         title=title,
                         source_url=source_url,
+                        course_id=course_id,
+                        course_name=course_name,
                         file_path="",
                         file_size=0,
                         uploaded_at=datetime.now().isoformat(),
@@ -144,7 +167,9 @@ class VideoDownloader:
                     self.downloads[video_id] = {
                         "status": "completed",
                         "progress": 100,
-                        "file_path": file_path
+                        "file_path": file_path,
+                        "course_id": course_id,
+                        "course_name": course_name,
                     }
                 except Exception as retry_error:
                     self._handle_error(video_id, f"Retry failed: {str(retry_error)}")

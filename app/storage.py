@@ -63,6 +63,8 @@ class LocalStorage:
             "video_id": video_id,
             "title": metadata.title,
             "source_url": metadata.source_url,
+            "course_id": metadata.course_id,
+            "course_name": metadata.course_name,
             "file_path": str(destination),
             "file_size": file_size,
             "uploaded_at": metadata.uploaded_at,

@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
@@ -8,11 +8,15 @@ class VideoDownloadRequest(BaseModel):
     title: Optional[str] = None
     source_url: Optional[str] = None
     metadata: Optional[dict] = None
+    course_id: Optional[str] = None
+    course_name: Optional[str] = None
 
 class VideoMetadata(BaseModel):
     video_id: str
     title: Optional[str]
     source_url: Optional[str]
+    course_id: Optional[str] = None
+    course_name: Optional[str] = None
     file_path: str
     file_size: int
     uploaded_at: str
@@ -23,3 +27,7 @@ class VideoMetadata(BaseModel):
     transcript_status: Optional[str] = None
     transcript_error: Optional[str] = None
     transcript_segments: Optional[List[Dict[str, Any]]] = None
+
+
+class CourseCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)

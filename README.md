@@ -133,6 +133,10 @@ Once the server is running, you can access:
 ### Document Management
 - `POST /api/documents/upload` - Upload PDF slides; file is saved under `storage/documents/` and metadata recorded in `data/documents.json`
 
+### Course Management
+- `POST /api/courses` - Create a course record in SQLite (`course_id` returned)
+- `GET /api/courses` - List available courses for UI dropdowns/extensions
+
 ## Example Usage
 
 ### Start a video download
@@ -143,7 +147,9 @@ curl -X POST "http://localhost:8000/api/videos/download" \
   -d '{
     "stream_url": "https://example.panopto.com/stream/...",
     "title": "My Video",
-    "source_url": "https://example.panopto.com/..."
+    "source_url": "https://example.panopto.com/...",
+    "course_id": "course_20250101_120000_000000",
+    "course_name": "CSC282 - Algorithms"
   }'
 ```
 
@@ -211,6 +217,7 @@ doc = Document(
         "segments": metadata["transcript_segments"],
         "lecture_id": video_id,
         "source": "transcript",
+        "course_id": metadata.get("course_id"),
     },
 )
 
