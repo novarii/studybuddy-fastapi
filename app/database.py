@@ -31,6 +31,26 @@ class CourseDatabase:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS course_lectures (
+                    course_id TEXT NOT NULL,
+                    lecture_id TEXT NOT NULL,
+                    PRIMARY KEY (course_id, lecture_id),
+                    FOREIGN KEY(course_id) REFERENCES courses(id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS course_documents (
+                    course_id TEXT NOT NULL,
+                    document_id TEXT NOT NULL,
+                    PRIMARY KEY (course_id, document_id),
+                    FOREIGN KEY(course_id) REFERENCES courses(id) ON DELETE CASCADE
+                )
+                """
+            )
 
     # Placeholder helpers for upcoming endpoints
     def create_course(self, course_id: str, name: str) -> None:
@@ -49,3 +69,35 @@ class CourseDatabase:
         with self._connect() as conn:
             cur = conn.execute("SELECT id, name FROM courses ORDER BY name ASC")
             return cur.fetchall()
+
+    # Relational helpers --------------------------------------------------
+
+    def link_lecture(self, course_id: str, lecture_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO course_lectures (course_id, lecture_id) VALUES (?, ?)",
+                (course_id, lecture_id),
+            )
+
+    def link_document(self, course_id: str, document_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO course_documents (course_id, document_id) VALUES (?, ?)",
+                (course_id, document_id),
+            )
+
+    def list_lectures_for_course(self, course_id: str) -> List[str]:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "SELECT lecture_id FROM course_lectures WHERE course_id = ? ORDER BY lecture_id",
+                (course_id,),
+            )
+            return [row["lecture_id"] for row in cur.fetchall()]
+
+    def list_documents_for_course(self, course_id: str) -> List[str]:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "SELECT document_id FROM course_documents WHERE course_id = ? ORDER BY document_id",
+                (course_id,),
+            )
+            return [row["document_id"] for row in cur.fetchall()]
