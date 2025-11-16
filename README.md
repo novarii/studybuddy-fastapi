@@ -189,3 +189,32 @@ The server runs with auto-reload enabled when using the `--reload` flag, so chan
 - Uploaded PDFs are stored in `storage/documents/` with metadata in `data/documents.json`
 - Metadata (including transcript text/status) is stored in `data/videos.json`
 - CORS is enabled for all origins (configure appropriately for production)
+
+## Timestamp-aware chunking with Agno
+
+To feed transcripts into Agno’s knowledge base while keeping the precise ElevenLabs timecodes,
+use the `TimestampAwareChunking` strategy defined in `app/chunking.py`. It converts the stored
+`transcript_segments` (word-level timestamps) into chunks that include `start_ms`/`end_ms`
+metadata so the frontend and agents can jump directly to the right moment in a lecture.
+
+```python
+from agno.knowledge.document.base import Document
+from app.chunking import TimestampAwareChunking
+
+doc = Document(
+    id=video_id,
+    name=metadata["title"],
+    content=metadata["transcript"],
+    meta_data={
+        "segments": metadata["transcript_segments"],
+        "lecture_id": video_id,
+        "source": "transcript",
+    },
+)
+
+chunker = TimestampAwareChunking(max_words=110, max_duration_ms=75_000, overlap_ms=12_000)
+chunks = chunker.chunk(doc)
+```
+
+Each emitted chunk inherits the transcript context and includes the millisecond offsets required
+for semantic search + timestamp previews in your UI.

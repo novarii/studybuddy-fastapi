@@ -34,6 +34,7 @@ class VideoDownloader:
                 "audio_path": existing_video.get("audio_path"),
                 "transcript": existing_video.get("transcript"),
                 "transcript_status": existing_video.get("transcript_status"),
+                "transcript_segments": existing_video.get("transcript_segments"),
             }
             return job_id
         
@@ -52,6 +53,7 @@ class VideoDownloader:
             "audio_path": None,
             "transcript_status": "pending" if self.transcriber else None,
             "transcript": None,
+            "transcript_segments": None,
         }
         
         # Start download in background thread
@@ -112,6 +114,7 @@ class VideoDownloader:
                     "skipped" if not self.transcriber else "pending"
                 ),
                 "transcript": (transcript_info or {}).get("text"),
+                "transcript_segments": (transcript_info or {}).get("segments"),
             }
             
         except RegexNotMatch:
@@ -181,6 +184,7 @@ class VideoDownloader:
             "audio_path": None,
             "transcript_status": None,
             "transcript": None,
+            "transcript_segments": None,
         }
         
         # Also update metadata if it exists
@@ -204,6 +208,7 @@ class VideoDownloader:
                 "audio_path": video.get("audio_path"),
                 "transcript": video.get("transcript"),
                 "transcript_status": video.get("transcript_status"),
+                "transcript_segments": video.get("transcript_segments"),
             }
         
         return {"status": "not_found"}
@@ -246,5 +251,6 @@ class VideoDownloader:
             transcript=result.get("text"),
             transcript_status=result.get("status"),
             transcript_error=result.get("error"),
+            transcript_segments=result.get("segments"),
         )
         return result

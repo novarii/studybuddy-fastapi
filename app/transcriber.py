@@ -1,5 +1,5 @@
 import os
-from typing import Optional, Dict
+from typing import Optional, Dict, Any, List
 
 import requests
 from dotenv import load_dotenv
@@ -29,12 +29,13 @@ class ElevenLabsTranscriber:
             tag_audio_events or os.getenv("ELEVENLABS_TAG_AUDIO_EVENTS", "false").lower() == "true"
         )
 
-    def transcribe(self, audio_path: str) -> Dict[str, Optional[str]]:
+    def transcribe(self, audio_path: str) -> Dict[str, Any]:
         """Send the audio file to ElevenLabs and return transcription info."""
         if not self.api_key:
             return {
                 "status": "skipped",
                 "text": None,
+                "segments": [],
                 "error": "ELEVENLABS_API_KEY not configured",
             }
 
@@ -42,6 +43,7 @@ class ElevenLabsTranscriber:
             return {
                 "status": "failed",
                 "text": None,
+                "segments": [],
                 "error": f"Audio file not found: {audio_path}",
             }
 
@@ -65,9 +67,11 @@ class ElevenLabsTranscriber:
             )
             response.raise_for_status()
             payload = response.json()
+            segments = self._extract_segments(payload)
             return {
                 "status": "completed",
                 "text": payload.get("text"),
+                "segments": segments,
                 "error": None,
             }
         except requests.RequestException as exc:
@@ -81,7 +85,74 @@ class ElevenLabsTranscriber:
             return {
                 "status": "failed",
                 "text": None,
+                "segments": [],
                 "error": error_msg,
             }
         finally:
             files["file"].close()
+
+    def _extract_segments(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Normalize the ElevenLabs word-level timestamps into a structure
+        we can persist. Each item contains the token text plus millisecond
+        offsets that downstream search/chunking can use.
+        """
+        words_source = payload.get("words") or payload.get("word_timestamps") or []
+
+        if isinstance(words_source, dict):
+            # Some responses may wrap words in a dict keyed by channel/speaker.
+            # Flatten into a plain list.
+            flattened: List[Any] = []
+            for value in words_source.values():
+                if isinstance(value, list):
+                    flattened.extend(value)
+            words_source = flattened
+
+        segments: List[Dict[str, Any]] = []
+        if not isinstance(words_source, list):
+            return segments
+
+        for entry in words_source:
+            if not isinstance(entry, dict):
+                continue
+            text = entry.get("text") or entry.get("word")
+            if not text:
+                continue
+
+            start_ms = self._to_milliseconds(
+                seconds_value=entry.get("start") or entry.get("start_time"),
+                milliseconds_value=entry.get("start_ms"),
+            )
+            end_ms = self._to_milliseconds(
+                seconds_value=entry.get("end") or entry.get("end_time"),
+                milliseconds_value=entry.get("end_ms"),
+            )
+
+            segment = {
+                "text": text,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "confidence": entry.get("confidence"),
+                "speaker": entry.get("speaker"),
+            }
+            # Preserve diarization tags/events if present.
+            if "type" in entry:
+                segment["type"] = entry["type"]
+            segments.append(segment)
+
+        return segments
+
+    @staticmethod
+    def _to_milliseconds(*, seconds_value: Optional[Any], milliseconds_value: Optional[Any]) -> Optional[int]:
+        """Convert various timestamp formats to millisecond integers."""
+        if milliseconds_value is not None:
+            try:
+                return int(float(milliseconds_value))
+            except (TypeError, ValueError):
+                return None
+        if seconds_value is not None:
+            try:
+                return int(float(seconds_value) * 1000)
+            except (TypeError, ValueError):
+                return None
+        return None

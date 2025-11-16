@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 class VideoDownloadRequest(BaseModel):
@@ -22,3 +22,4 @@ class VideoMetadata(BaseModel):
     transcript: Optional[str] = None
     transcript_status: Optional[str] = None
     transcript_error: Optional[str] = None
+    transcript_segments: Optional[List[Dict[str, Any]]] = None

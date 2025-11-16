@@ -72,6 +72,7 @@ class LocalStorage:
             "transcript": metadata.transcript,
             "transcript_status": metadata.transcript_status,
             "transcript_error": metadata.transcript_error,
+            "transcript_segments": metadata.transcript_segments,
         }
         self._save_metadata(metadata_dict)
         
