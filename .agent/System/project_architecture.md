@@ -125,6 +125,9 @@ Helper methods `link_lecture`, `link_document`, `list_lectures_for_course`, and 
 
 These strategies ensure every chunk stored in Chroma (or another vector DB) stays immutable yet queryable by `lecture_id`/`document_id`, enabling course-level filtering via SQLite lookups instead of duplicating mutable metadata inside the embeddings.
 
+### Chroma Ingestion
+- `scripts/ingest_chroma.py` is the entry point for writing lecture and slide chunks into persistent Chroma collections. Provide `--course-id`, `--user-id`, optional `--lectures` and `--documents`, plus the desired `--chroma-path`, `--lecture-collection`, and `--slide-collection`. The script reuses the chunkers above, strips heavy metadata (segments) before insertion, and prints how many chunks landed in each collection so search flows can query lectures/slides independently.
+
 ## Related Docs
 - `.agent/SOP/adding_api_endpoint.md`
 - `.agent/Tasks/current_features.md`

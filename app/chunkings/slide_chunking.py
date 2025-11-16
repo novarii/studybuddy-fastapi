@@ -7,7 +7,7 @@ This strategy:
 - Preserves slide metadata and context
 """
 
-from typing import List
+from typing import Dict, List, Optional
 
 from agno.knowledge.chunking.strategy import ChunkingStrategy
 from agno.knowledge.document.base import Document
@@ -151,6 +151,7 @@ def chunk_slide_descriptions(
     descriptions: List[dict],
     document_id: str,
     max_chars: int = 2000,
+    extra_meta: Optional[Dict] = None,
 ) -> List[Document]:
     """
     Convert slide descriptions to chunked Documents.
@@ -191,16 +192,20 @@ def chunk_slide_descriptions(
         content = "\n".join(content_parts)
 
         # Create document
+        meta = {
+            "document_id": document_id,
+            "page_number": desc["page_number"],
+            "slide_type": desc.get("slide_type", "unknown"),
+            "summary": desc.get("overall_summary", ""),
+        }
+        if extra_meta:
+            meta.update(extra_meta)
+
         doc = Document(
             id=f"{document_id}_page_{desc['page_number']}",
             name=f"Slide {desc['page_number']}",
             content=content,
-            meta_data={
-                "document_id": document_id,
-                "page_number": desc["page_number"],
-                "slide_type": desc.get("slide_type", "unknown"),
-                "summary": desc.get("overall_summary", ""),
-            },
+            meta_data=meta,
         )
 
         # Chunk the document

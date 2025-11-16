@@ -176,6 +176,21 @@ PYTHONPATH=$PWD scripts/export_chunks.py --document-id doc_20250102_130000_00000
 ```
 Outputs land in `data/chunks/` for quick inspection before sending to Chroma.
 
+### Ingest a course into Chroma
+
+```bash
+PYTHONPATH=$PWD scripts/ingest_chroma.py \
+  --course-id course_20250101_120000_000000 \
+  --user-id alice@example.com \
+  --lectures video_20250105_101010_000001 \
+  --documents doc_20250106_123000_000000 \
+  --lecture-collection course_lectures \
+  --slide-collection course_slides \
+  --chroma-path data/chroma_db
+```
+
+`--lectures` defaults to all lectures stored for that course; `--documents` is optional and expects slide decks that already have `slides/describe` output. Lecture and slide chunks are inserted into separate Chroma collections (specified via `--lecture-collection` and `--slide-collection`) so your agent can query them independently.
+
 ## Project Structure
 
 ```
