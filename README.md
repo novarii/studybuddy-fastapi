@@ -168,6 +168,8 @@ studybuddy-fastapi/
 │   ├── models.py        # Pydantic models
 │   ├── downloader.py    # Video download logic
 │   ├── document_storage.py # PDF storage utilities
+│   ├── chunkings/
+│   │   └── chunking.py  # Timestamp-aware chunking strategy
 │   ├── storage.py       # Local storage management
 │   └── transcriber.py   # ElevenLabs speech-to-text integration
 ├── storage/
@@ -193,13 +195,13 @@ The server runs with auto-reload enabled when using the `--reload` flag, so chan
 ## Timestamp-aware chunking with Agno
 
 To feed transcripts into Agno’s knowledge base while keeping the precise ElevenLabs timecodes,
-use the `TimestampAwareChunking` strategy defined in `app/chunking.py`. It converts the stored
+use the `TimestampAwareChunking` strategy defined in `app/chunkings/chunking.py`. It converts the stored
 `transcript_segments` (word-level timestamps) into chunks that include `start_ms`/`end_ms`
 metadata so the frontend and agents can jump directly to the right moment in a lecture.
 
 ```python
 from agno.knowledge.document.base import Document
-from app.chunking import TimestampAwareChunking
+from app.chunkings.chunking import TimestampAwareChunking
 
 doc = Document(
     id=video_id,
