@@ -3,7 +3,7 @@
 Use this index to locate the latest internal docs for the StudyBuddy FastAPI project.
 
 ## System Docs
-- [`System/project_architecture.md`](System/project_architecture.md) – End-to-end overview of goals, tech stack, directory layout, workflows, course/catalog persistence, slide agent flow, data schema, integrations, and chunking strategies.
+- [`System/project_architecture.md`](System/project_architecture.md) – Current-state architecture reference covering runtime topology, API surface, ingestion workflows, persistence schema (JSON/SQLite/Chroma), and required external services + environment variables.
 
 ## SOPs
 - [`SOP/adding_api_endpoint.md`](SOP/adding_api_endpoint.md) – Checklist for designing, implementing, and documenting new FastAPI routes or business logic changes.

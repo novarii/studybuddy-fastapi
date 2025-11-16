@@ -1,138 +1,121 @@
 # Project Architecture
 
-## Overview
-StudyBuddy FastAPI powers an internal REST API that pulls down Panopto lectures, extracts MP3 audio, transcribes that audio with ElevenLabs, and now processes uploaded slide decks through a Gemini-powered agent for downstream chunking. Runtime artifacts live under `storage/`, metadata lands in JSON files under `data/`, and a light SQLite catalog (`data/app.db`) tracks courses plus their associated lectures/documents. A separate `chat.py` bootstraps an Agno Agent FastAPI app for experimentation.
+## Product Goal & Runtime Snapshot
+StudyBuddy FastAPI is a developer-facing service that downloads Panopto lectures, extracts and transcribes their audio, ingests both lectures and slide decks into Chroma, and exposes the resulting knowledge through a retrieval-augmented chat API. The system is intentionally filesystem-first: videos, audio, documents, transcripts, and chunk exports live under `storage/` or `data/`, while durable configuration sits inside `.env.local`. StudyBuddy also bundles an Agno AgentOS sandbox (`chat.py`) for experiments outside the primary FastAPI app.
 
-## Tech Stack & Structure
-- **Language**: Python 3.11+
-- **Frameworks/Libraries**: FastAPI, Pydantic, Uvicorn, PanoptoDownloader, ffmpeg CLI, ElevenLabs Speech-to-Text, Google Gemini (via `agno`), Agno AgentOS, sqlite3.
-- **Persistence**: Filesystem storage for media + PDFs, JSON metadata (`data/videos.json`, `data/documents.json`, `data/document_descriptions/`), and SQLite (`data/app.db`) for course relationships.
-- **Key Modules**:
-  - `app/main.py` – FastAPI routes, dependency wiring, and new course + slide-agent endpoints.
-  - `app/downloader.py` – Background downloader that streams Panopto MP4s, extracts audio, and triggers transcription.
-  - `app/storage.py` – Moves media files into `storage/` and keeps `data/videos.json` in sync.
-  - `app/document_storage.py` – Handles PDF uploads plus slide description persistence.
-  - `app/pdf_slide_description_agent.py` – Gemini agent that emits structured `SlideContent` objects per page.
-  - `app/chunkings/` – Chunking strategies (`TimestampAwareChunking` for transcripts, `SlideChunking` for slide summaries).
-  - `app/database.py` – SQLite helper creating `courses`, `course_lectures`, and `course_documents` tables.
-  - `app/models.py` – Pydantic schemas (video download, metadata, course creation, etc.).
-  - `app/transcriber.py` – ElevenLabs integration with env-based configuration.
-  - `scripts/manual_transcribe.py` – CLI helper to smoke-test transcription + timestamps.
-  - `tests/test_chunking.py` – Pytest coverage for transcript + slide chunkers.
-  - `chat.py` – Optional Agno Agent FastAPI bootstrap.
-
-### Directory Layout
 ```
-app/
-├── main.py
-├── models.py
-├── downloader.py
-├── storage.py
-├── document_storage.py
-├── pdf_slide_description_agent.py
-├── chunkings/
-│   ├── chunking.py
-│   └── slide_chunking.py
-└── database.py
-data/videos.json
-data/documents.json
-data/document_descriptions/
-data/app.db
-data/transcripts/
-data/transcript_segments/
-storage/videos/
-storage/audio/
-storage/documents/
+browser extension / CLI → FastAPI routes (app/main.py)
+                     ↙                 ↘
+     VideoDownloader threads      BackgroundTasks for PDFs
+          ↙             ↘              ↙             ↘
+   storage/videos   storage/audio   storage/documents  data/document_descriptions
+          ↓                ↓                  ↓                     ↓
+   data/videos.json ↔ LocalStorage   data/documents.json ↔ DocumentStorage
+          ↓                                   ↓
+     ChromaIngestionService (TimestampAwareChunking / SlideChunking)
+          ↓
+   Chroma collections (course_lectures + course_slides)
+          ↓
+   StudyBuddyChatAgent (Agno + OpenAIChat)
 ```
 
-## Core Workflows
-1. **Course Catalog**
-   - Clients create/select courses via `POST /api/courses` and `GET /api/courses` before uploading lectures.
-   - `CourseDatabase` persists each course (`id`, `name`) and provides helper methods to link lectures/documents for future filtering (e.g., Chroma).
-2. **Video Download & Storage**
-   - `POST /api/videos/download` validates `stream_url` + `course_id`, hydrates canonical course names, generates `video_id` as needed, then calls `VideoDownloader.download_video`.
-   - Downloader threads use `PanoptoDownloader` to fetch MP4s to a temp file, then `LocalStorage.store_video` moves them into `storage/videos` while updating `data/videos.json` with `course_id`/`course_name` and transcript placeholders.
-3. **Audio Extraction & Transcription**
-   - `_convert_to_audio` runs `ffmpeg` to produce MP3s under `storage/audio`.
-   - When an `ElevenLabsTranscriber` is configured, `_transcribe_audio` uploads the MP3, captures word-level timestamps, and `LocalStorage.update_metadata` persists the transcript text under `data/transcripts/{video_id}.txt` plus timestamp segments under `data/transcript_segments/{video_id}.json`. Only the resulting file paths, status, and errors are written back to `data/videos.json`.
-4. **Status + Retrieval APIs**
-   - `GET /api/videos`, `/api/videos/{id}`, and `/api/videos/{id}/status` combine in-memory job state with persisted metadata (paths, transcript status, timing segments, course info).
-   - `GET /api/videos/{id}/file` streams the stored MP4; `DELETE /api/videos/{id}` purges media + metadata.
-5. **PDF Uploads & Slide Agent**
-   - `POST /api/documents/upload` streams validated PDFs into `storage/documents` and records metadata in `data/documents.json`.
-   - `POST /api/documents/{document_id}/slides/describe` runs `PDFSlideDescriptionAgent` (Gemini) page-by-page and saves the resulting structured descriptions to `data/document_descriptions/{document_id}_slides.json`. Metadata for that document is updated with the output path + page counts.
-6. **Chunking for Knowledge Ingestion**
-   - Transcript ingestion uses `TimestampAwareChunking`, which honors ElevenLabs word segments to produce chunks annotated with `start_ms`, `end_ms`, `chunk_index`, `chunking_strategy`, and the owning `lecture_id`. Course relationships live in SQLite, so we avoid duplicating `course_id` inside Chroma metadata.
-   - Slide ingestion uses `SlideChunking`, which emits one chunk per slide by default and splits oversized slides into deterministic parts while preserving `document_id`, `page_number`, and chunk counters (again without embedding the course identifier).
-   - `ChromaIngestionService` (see below) consumes these chunks automatically after transcripts or slide descriptions are generated, so manual scripts are only needed for backfills.
-7. **Agno AgentOS (Optional)**
-   - `chat.py` wires an Agno Agent (Claude + SqliteDb) into AgentOS for experimentation but is separate from the primary FastAPI app.
+## Tech Stack & Module Guide
+- **Language + runtime**: Python 3.11+, FastAPI + Uvicorn, Pydantic v1 models, pytest for unit tests.
+- **External services**: PanoptoDownloader CLI, ffmpeg, ElevenLabs Speech-to-Text, Google Gemini (through `agno.models.google`), OpenAI Chat models for retrieval, Chroma for embeddings, dotenv for env management.
+- **Persistence**: Filesystem-backed metadata (JSON under `data/`), binary assets under `storage/`, SQLite (`data/app.db`) for courses, and Chroma for vector search (`tmp/chromadb` by default).
 
-## Data & Persistence
-### JSON Metadata
-- **`data/videos.json`** – keyed by `video_id`, storing:
-  - `title`, `source_url` (optional)
-  - `course_id` (required) and friendly `course_name`
-  - `file_path`, `file_size`, `uploaded_at`, `status`, `error`
-  - `audio_path`
-  - `transcript_status`, `transcript_error`
-  - `transcript_path`, `transcript_segments_path` (pointing to per-lecture payloads under `data/transcripts/` and `data/transcript_segments/`)
-- **`data/documents.json`** – keyed by `document_id`, storing:
-  - `original_filename`, `content_type`, `file_path`, `file_size`, `uploaded_at`
-  - `slide_descriptions_path`, `slide_descriptions_updated_at`, `slide_page_count` when the agent runs
+| Module | Responsibility |
+| --- | --- |
+| `app/main.py` | Declares all FastAPI routes, wires singleton services (storage, downloader, chroma ingestor, chat agent), and orchestrates background slide processing. |
+| `app/downloader.py` | Wraps `PanoptoDownloader` downloads, tracks status in-memory, extracts audio (ffmpeg), runs ElevenLabs transcription, and triggers lecture ingestion. |
+| `app/storage.py` | Owns `storage/videos`, `storage/audio`, transcript persistence (`data/transcripts/`, `data/transcript_segments/`), and the canonical `data/videos.json` metadata file. |
+| `app/document_storage.py` | Streams uploaded PDFs into `storage/documents`, tracks metadata in `data/documents.json`, and stores slide descriptions under `data/document_descriptions/`. |
+| `app/transcriber.py` | Configurable ElevenLabs client that normalizes word-level timestamps for downstream chunking. |
+| `app/pdf_slide_description_agent.py` | Gemini-powered agent that emits structured `SlideContent` objects per page without rasterizing the PDF. |
+| `app/chunkings/` | Houses `TimestampAwareChunking` and `SlideChunking` strategies used across ingestion pipelines and exported utilities. |
+| `app/chroma_ingestion.py` | Converts stored transcripts/slides into Agno `Document` chunks, sanitizes metadata, and pushes them into Chroma collections. Also offers helper methods for lecture IDs per course. |
+| `app/chat_agent.py` | Configures the Agno Agent that queries Chroma, merges lecture + slide hits, and exposes streaming/non-streaming replies. |
+| `app/database.py` | Boots an on-disk SQLite store with `courses`, `course_lectures`, and `course_documents` tables. Currently only CRUD for `courses` is wired, but link helpers exist for future association endpoints. |
+| `scripts/ingest_chroma.py`, `scripts/export_chunks.py`, `scripts/manual_transcribe.py` | Ad-hoc CLIs for ingestion backfills, debugging chunkers, and manually validating ElevenLabs transcription pipelines. |
+| `tests/test_chunking.py` | Regression coverage for the transcript and slide chunkers. |
+| `chat.py` | Standalone Agno AgentOS FastAPI app unrelated to the StudyBuddy API but available for experimentation. |
 
-- **`data/transcripts/{video_id}.txt`** – raw transcript text per lecture.
-- **`data/transcript_segments/{video_id}.json`** – ElevenLabs word-level timestamps for each lecture.
-- **`data/document_descriptions/*.json`** – arrays of slide description dicts (`SlideContent.model_dump()`), ready for chunking + vector storage.
+## API Surface (app/main.py)
+- `GET /` – service banner + health indicator.
+- `GET /api/health` – storage path existence plus API status.
+- `POST /api/videos/download` – requires `stream_url` + `course_id`; creates/validates course, spawns a download thread, and returns `{job_id, video_id}` for polling.
+- `GET /api/videos` – dumps metadata from `data/videos.json`.
+- `GET /api/videos/active` – in-memory view of `VideoDownloader.downloads` (download progress + transcription state).
+- `GET /api/videos/{video_id}/status` – merged status (`downloader.downloads` fallback to persisted metadata).
+- `GET /api/videos/{video_id}` – hydrated metadata including transcript text/segments (loaded from disk on demand).
+- `GET /api/videos/{video_id}/file` – streams stored MP4.
+- `DELETE /api/videos/{video_id}` – removes media, audio, transcript artifacts, and metadata entry.
+- `POST /api/documents/upload` – PDF-only upload; enqueues `process_document_pipeline` background job.
+- `POST /api/documents/{document_id}/slides/describe` – force-runs the Gemini agent synchronously, writes JSON descriptions, and ingests resulting slide chunks.
+- `DELETE /api/documents/{document_id}` – removes PDF + derived files.
+- `POST /api/courses` / `GET /api/courses` – create and list course shells before ingestion.
+- `POST /api/chat` – runs `StudyBuddyChatAgent.respond` and returns markdown + references.
+- `POST /api/chat/stream` – wraps `StudyBuddyChatAgent.stream_response` in Server-Sent Events (`event`, optional `content`/`tools`).
+
+## End-to-End Workflows
+
+### Lecture ingestion pipeline
+1. Client calls `POST /api/videos/download` with a Panopto `stream_url`, `course_id`, optional `video_id`/title/source.
+2. `CourseDatabase` ensures the course exists; `VideoDownloader.download_video` records an entry in `self.downloads` and dispatches `_download_worker` on its own thread.
+3. `_download_worker` pulls to a temp file via `PanoptoDownloader`, invokes `_convert_to_audio` (ffmpeg) for MP3 output, and persists a `VideoMetadata` object to `data/videos.json` using `LocalStorage.store_video`.
+4. If audio extraction succeeded and ElevenLabs credentials are set, `_transcribe_audio` posts the MP3 to `ElevenLabsTranscriber`. Transcript text and timestamp segments are written to `data/transcripts/{video_id}.txt` and `data/transcript_segments/{video_id}.json` via `LocalStorage.update_metadata`.
+5. When transcription finishes successfully, `_ingest_lecture` calls `ChromaIngestionService.ingest_lectures([video_id])`. `TimestampAwareChunking` consumes the transcript + segments to create overlapping windows annotated with `chunk_index`, `start_ms`, `end_ms`, and `lecture_id`. Metadata deliberately excludes mutable fields such as `course_id`.
+6. Clients poll `/api/videos/{video_id}/status` to monitor download → transcription → ingestion progress.
+
+### Slide ingestion pipeline
+1. Client uploads a PDF through `POST /api/documents/upload`. `DocumentStorage.save_document` streams to `storage/documents/{document_id}.pdf` and records metadata in `data/documents.json`. FastAPI schedules `process_document_pipeline(document_id)` via `BackgroundTasks`.
+2. The pipeline fetches metadata, validates the on-disk PDF, and calls `PDFSlideDescriptionAgent.process_pdf`. The agent iterates through pages using Gemini (default `gemini-2.0-flash-exp`) and emits `SlideContent` models containing summaries plus fine-grained descriptions.
+3. `DocumentStorage.save_slide_descriptions` writes JSON output to `data/document_descriptions/{document_id}_slides.json` and annotates metadata with `slide_descriptions_path`, last-updated timestamp, and `slide_page_count`.
+4. `ChromaIngestionService.ingest_slides([document_id])` loads those descriptions and converts each slide to `Document` instances. `SlideChunking` emits one or two chunks per slide (`chunk`/`total_chunks` metadata) and keeps `document_id`, `page_number`, `slide_type`, summary, and optional `user_id` metadata. The CLI `scripts/export_chunks.py` uses the same helpers for debugging.
+
+### Retrieval & chat
+1. `StudyBuddyChatAgent` instantiates two `Knowledge` handles backed by Chroma collections (`course_lectures`, `course_slides`). Both connect to `tmp/chromadb` unless overridden via env.
+2. The agent runs OpenAI Chat (`gpt-4o-mini` by default; overridable via `CHAT_MODEL_ID`) with custom `knowledge_retriever`. Depending on the `source` requested (`lectures`, `slides`, `combined`), it queries the appropriate collections, tags each hit with `knowledge_source`, and merges + sorts by similarity score.
+3. `/api/chat` exposes synchronous responses (markdown text + references). `/api/chat/stream` replays the `RunOutputEvent` stream as SSE, preserving `event`, `content`, and `tools` payloads for the caller.
+4. The agent enforces `OPENAI_API_KEY` at initialization. Slides/lectures may also include `user_id` filters, allowing per-user knowledge partitions when the ingestion CLI is invoked with `--user-id`.
+
+## Persistence Map
+
+### Filesystem + JSON
+- `storage/videos/{video_id}.mp4` – canonical MP4 asset referenced by `file_path` in metadata.
+- `storage/audio/{video_id}.mp3` – derived MP3 for ElevenLabs submissions.
+- `storage/documents/{document_id}.pdf` – uploaded slide decks.
+- `data/videos.json` – dictionary keyed by `video_id` including: `title`, `source_url`, `course_id`, `course_name`, `file_path`, `file_size`, `uploaded_at`, `status`, `error`, `audio_path`, `transcript_status`, `transcript_error`, `transcript_path`, `transcript_segments_path`, and ingestion status fields appended over time.
+- `data/transcripts/{video_id}.txt` & `data/transcript_segments/{video_id}.json` – lazily populated text + timestamp payloads read back inside `LocalStorage.get_video` when API callers need them.
+- `data/documents.json` – dictionary keyed by `document_id` that stores `original_filename`, `content_type`, `file_path`, `file_size`, `uploaded_at`, plus slide description metadata (`slide_descriptions_path`, `_updated_at`, `slide_page_count`).
+- `data/document_descriptions/{document_id}_slides.json` – structured `SlideContent` output; used by ingestion and inspection tools.
+- `data/chunks/` – optional exports generated by `scripts/export_chunks.py`.
 
 ### SQLite (`data/app.db`)
-Managed by `CourseDatabase`:
-| Table | Columns | Purpose |
-| --- | --- | --- |
-| `courses` | `id TEXT PRIMARY KEY`, `name TEXT NOT NULL` | Canonical course list surfaced to clients.
-| `course_lectures` | `course_id TEXT`, `lecture_id TEXT`, PK `(course_id, lecture_id)` | Maps lectures (video IDs) to courses for downstream filtering.
-| `course_documents` | `course_id TEXT`, `document_id TEXT`, PK `(course_id, document_id)` | Maps uploaded slide decks to their courses.
+```
+courses(id TEXT PRIMARY KEY, name TEXT NOT NULL)
+course_lectures(course_id TEXT, lecture_id TEXT, PRIMARY KEY(course_id, lecture_id))
+course_documents(course_id TEXT, document_id TEXT, PRIMARY KEY(course_id, document_id))
+```
+Only `/api/courses` endpoints currently hit this DB, but helper methods (`link_lecture`, `link_document`, `list_*_for_course`) are ready for future association work or ingestion filters.
 
-Helper methods `link_lecture`, `link_document`, `list_lectures_for_course`, and `list_documents_for_course` let ingestion jobs maintain or query these relationships without mutating chunk metadata (important because Chroma collections are immutable once written).
+### Vector store (Chroma)
+- Default path: `tmp/chromadb`. Collections: `course_lectures` and `course_slides` (configurable via `ChromaIngestionConfig`).
+- Stored metadata intentionally omits `course_id` to avoid stale embeddings; lookups rely on `lecture_id` / `document_id`, `chunk_index`, `chunking_strategy`, `start_ms`/`end_ms` (lectures), `page_number` (slides), and optional `user_id`. `chunk_id` is derived from document IDs for traceability.
 
-## API Surface
-- `GET /` – simple status message.
-- `GET /api/health` – confirms storage paths.
-- `POST /api/courses` / `GET /api/courses` – manage/select courses before uploads.
-- `POST /api/videos/download` – kick off Panopto downloads; requires `course_id`.
-- `GET /api/videos` / `/api/videos/active` – inspect stored metadata or in-flight jobs.
-- `GET /api/videos/{video_id}` / `/api/videos/{video_id}/status` – retrieve metadata/progress.
-- `GET /api/videos/{video_id}/file` – download stored MP4.
-- `DELETE /api/videos/{video_id}` – remove media + metadata.
-- `POST /api/documents/upload` – ingest slide PDFs; immediately schedules the slide-description agent + Chroma ingestion in a FastAPI background task.
-- `POST /api/documents/{document_id}/slides/describe` – run the Gemini slide agent and persist results.
-- `POST /api/chat` – client-facing endpoint that relays prompts to the Agno chat agent backed by Chroma knowledge. `source` accepts `"lectures"`, `"slides"`, or `"combined"` (default) so one question can pull from both datasets.
-- `POST /api/chat/stream` – SSE endpoint that streams incremental chunks (events `RunContent`/`RunContentCompleted`) for live typing experiences in the frontend.
+## External Dependencies & Env Vars
+- **PanoptoDownloader** – imported from `PanoptoDownloader`; requires credentials/config in the runtime environment.
+- **ffmpeg** – must be installed on PATH for `_convert_to_audio`.
+- **ElevenLabs** – `ElevenLabsTranscriber` reads `ELEVENLABS_API_KEY`, `ELEVENLABS_MODEL_ID` (default `scribe_v1`), `ELEVENLABS_LANGUAGE_CODE`, `ELEVENLABS_DIARIZE`, and `ELEVENLABS_TAG_AUDIO_EVENTS`. Missing API keys cause transcripts to be marked `skipped`.
+- **Gemini** – `PDFSlideDescriptionAgent` uses `Gemini(id="gemini-2.0-flash-exp")`; `agno` expects standard Google API credentials in the environment.
+- **OpenAI** – `ChromaIngestionService` and `StudyBuddyChatAgent` both enforce `OPENAI_API_KEY`; chat model ID defaults to `gpt-4o-mini` but honors `CHAT_MODEL_ID`.
+- `.env.local` – loaded wherever credentials are needed so scripts + FastAPI share the same configuration.
 
-## External Integrations & Config
-- **PanoptoDownloader** – pulled via `requirements.txt`; ensure `yarl`, `multidict`, and `propcache` install cleanly on Python 3.11.
-- **ffmpeg** – must be available on `$PATH` for audio extraction.
-- **ElevenLabs** – configure `.env.local` or `.env` with `ELEVENLABS_API_KEY`, optional `ELEVENLABS_MODEL_ID`, `ELEVENLABS_LANGUAGE_CODE`, `ELEVENLABS_DIARIZE`, `ELEVENLABS_TAG_AUDIO_EVENTS`.
-- **Gemini** – `PDFSlideDescriptionAgent` uses `agno.models.google.Gemini`; provide credentials via Agno’s expected environment variables or configuration.
-- **Agno AgentOS** – `chat.py` depends on `agno` packages and optional `agno.db.sqlite`. It is isolated from the primary FastAPI server.
-
-## Chunking Strategies & Testing
-1. **TimestampAwareChunking** (`app/chunkings/chunking.py`)
-   - Requires `Document.meta_data["segments"] = transcript_segments`.
-   - Emits chunks with `chunk_index`, `chunking_strategy="timestamp_aware"`, `start_ms`, `end_ms`, and copies through `lecture_id` plus timing metadata (course identifiers stay in SQLite).
-   - Falls back to `chunking_strategy="timestamp_aware_fallback"` when no segments exist.
-2. **SlideChunking** (`app/chunkings/slide_chunking.py`)
-   - Operates on structured slide descriptions, emitting one chunk per slide or splitting into two when content exceeds `max_chars`.
-   - Adds `chunk`, `total_chunks`, and sets `chunking_strategy="slide_chunking"` so downstream filters remain consistent.
-3. **Tests** – `tests/test_chunking.py` covers timestamp preservation, fallback behavior, and slide chunk splitting. Run `PYTHONPATH=$PWD python -m pytest tests/test_chunking.py` after modifying chunkers.
-
-These strategies ensure every chunk stored in Chroma (or another vector DB) stays immutable yet queryable by `lecture_id`/`document_id`, enabling course-level filtering via SQLite lookups instead of duplicating mutable metadata inside the embeddings.
-
-### Chroma Ingestion
-- `app/chroma_ingestion.py` exposes `ChromaIngestionService`, which loads `.env.local`, converts `Document` chunks into Agno `Knowledge.add_contents` payloads, and sanitizes metadata (no `course_id` is written to Chroma—only `lecture_id` or `document_id`, chunk counters, and optional `user_id` remain).
-- The service is instantiated inside `app/main.py`, so completed ElevenLabs transcripts and uploaded PDFs automatically flow into Chroma without manual calls.
-- `app/chat_agent.py` wires a `StudyBuddyChatAgent` (Agno `Agent` + `OpenAIChat`) that uses a custom `knowledge_retriever` to merge lecture and slide searches in a single tool call. The FastAPI route exposes a thin wrapper returning markdown replies plus optional references (with `knowledge_source` metadata).
-- `scripts/ingest_chroma.py` is now a thin CLI wrapper around the shared service. Provide `--course-id`, `--user-id`, optional `--lectures` and `--documents`, plus the desired `--chroma-path`, `--lecture-collection`, and `--slide-collection`. The script prints how many chunks land in each collection for manual backfills or smoke tests.
+## Tooling & Quality Gates
+- `scripts/manual_transcribe.py` – transcribes arbitrary media files using ElevenLabs to debug diarization or timestamp extraction without hitting FastAPI routes.
+- `scripts/ingest_chroma.py` – CLI for bulk ingestion/backfills. Requires `--course-id` and `--user-id`, and optionally limits lecture/document IDs.
+- `scripts/export_chunks.py` – dumps transcript or slide chunks to `data/chunks/` for inspection.
+- `tests/test_chunking.py` – ensures chunking logic preserves overlaps, fallback behavior, and slide splitting heuristics. Run via `pytest` once dependencies are installed.
 
 ## Related Docs
 - `.agent/SOP/adding_api_endpoint.md`
