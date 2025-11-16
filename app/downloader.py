@@ -3,15 +3,26 @@ import subprocess
 import tempfile
 import threading
 from datetime import datetime
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
 import PanoptoDownloader
 from PanoptoDownloader.exceptions import *
+
 from app.transcriber import ElevenLabsTranscriber
 
+if TYPE_CHECKING:
+    from app.chroma_ingestion import ChromaIngestionService
+
 class VideoDownloader:
-    def __init__(self, storage, transcriber: Optional[ElevenLabsTranscriber] = None):
+    def __init__(
+        self,
+        storage,
+        transcriber: Optional[ElevenLabsTranscriber] = None,
+        ingestion_service: Optional["ChromaIngestionService"] = None,
+    ):
         self.storage = storage
         self.transcriber = transcriber
+        self.ingestion_service = ingestion_service
         self.downloads = {}  # Track active downloads
     
     def download_video(
@@ -122,7 +133,14 @@ class VideoDownloader:
                 transcript_info = self._transcribe_audio(video_id, audio_path)
             elif not self.transcriber:
                 self.storage.update_metadata(video_id, transcript_status="skipped")
-            
+
+            if (
+                self.ingestion_service
+                and transcript_info
+                and transcript_info.get("status") == "completed"
+            ):
+                self._ingest_lecture(video_id)
+
             # Update status
             self.downloads[video_id] = {
                 "status": "completed",
@@ -279,3 +297,16 @@ class VideoDownloader:
             transcript_segments=result.get("segments"),
         )
         return result
+
+    def _ingest_lecture(self, video_id: str) -> None:
+        """Send the completed lecture transcript into Chroma."""
+        if not self.ingestion_service:
+            return
+        try:
+            inserted = self.ingestion_service.ingest_lectures([video_id])
+            if inserted:
+                print(f"[info] Ingested {inserted} chunks for lecture {video_id} into Chroma.")
+            else:
+                print(f"[warn] No chunks produced for lecture {video_id}; ingestion skipped.")
+        except Exception as exc:
+            print(f"[warn] Failed to ingest lecture {video_id} into Chroma: {exc}")

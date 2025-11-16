@@ -1,8 +1,8 @@
 import sqlite3
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.models import VideoDownloadRequest, VideoMetadata, CourseCreateRequest
 from app.downloader import VideoDownloader
@@ -11,7 +11,7 @@ from app.document_storage import DocumentStorage
 from app.transcriber import ElevenLabsTranscriber
 from app.pdf_slide_description_agent import PDFSlideDescriptionAgent
 from app.database import CourseDatabase
-import os
+from app.chroma_ingestion import ChromaIngestionService
 
 app = FastAPI(title="Panopto Video Downloader API")
 
@@ -28,7 +28,8 @@ app.add_middleware(
 storage = LocalStorage(storage_dir="storage/videos", data_dir="data")
 document_storage = DocumentStorage(storage_dir="storage/documents", data_dir="data")
 transcriber = ElevenLabsTranscriber()
-downloader = VideoDownloader(storage, transcriber=transcriber)
+chroma_ingestor = ChromaIngestionService(storage=storage, document_storage=document_storage)
+downloader = VideoDownloader(storage, transcriber=transcriber, ingestion_service=chroma_ingestor)
 pdf_slide_agent = PDFSlideDescriptionAgent()
 course_db = CourseDatabase()
 
@@ -152,7 +153,7 @@ async def delete_video(video_id: str):
     return {"status": "deleted", "video_id": video_id}
 
 @app.post("/api/documents/upload")
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     """Upload a PDF document (slides) and store it locally."""
     if not file.filename.lower().endswith(".pdf") or file.content_type not in {
         "application/pdf",
@@ -162,7 +163,8 @@ async def upload_document(file: UploadFile = File(...)):
 
     metadata = document_storage.save_document(file)
     await file.close()
-    return {"status": "stored", "document": metadata}
+    background_tasks.add_task(process_document_pipeline, metadata["document_id"])
+    return {"status": "stored", "document": metadata, "processing": "queued"}
 
 
 @app.post("/api/documents/{document_id}/slides/describe")
@@ -190,12 +192,18 @@ async def describe_document_slides(document_id: str):
         document_id=document_id,
         descriptions=description_payload,
     )
+    ingested_chunks = 0
+    try:
+        ingested_chunks = chroma_ingestor.ingest_slides([document_id])
+    except Exception as exc:
+        print(f"[warn] Failed to ingest slide descriptions for {document_id}: {exc}")
 
     return {
         "document_id": document_id,
         "pages_processed": len(description_payload),
         "descriptions_path": str(descriptions_path),
         "descriptions": description_payload,
+        "ingested_chunks": ingested_chunks,
     }
 
 
@@ -234,6 +242,39 @@ async def list_courses():
     """List all available courses."""
     rows = course_db.list_courses()
     return {"courses": [dict(row) for row in rows], "count": len(rows)}
+
+def process_document_pipeline(document_id: str) -> None:
+    """Background pipeline to describe slides and ingest them into Chroma."""
+    document = document_storage.get_document(document_id)
+    if not document:
+        print(f"[warn] Document {document_id} vanished before processing.")
+        return
+    pdf_path = Path(document.get("file_path", ""))
+    if not pdf_path.exists():
+        print(f"[warn] PDF path missing for {document_id}: {pdf_path}")
+        return
+    try:
+        descriptions = pdf_slide_agent.process_pdf(pdf_path=pdf_path)
+    except HTTPException as exc:
+        print(f"[warn] Slide agent rejected document {document_id}: {exc.detail}")
+        return
+    except Exception as exc:
+        print(f"[warn] Failed to process slides for {document_id}: {exc}")
+        return
+
+    description_payload = [desc.model_dump() for desc in descriptions]
+    try:
+        document_storage.save_slide_descriptions(document_id=document_id, descriptions=description_payload)
+    except Exception as exc:
+        print(f"[warn] Failed to persist slide descriptions for {document_id}: {exc}")
+        return
+
+    try:
+        ingested = chroma_ingestor.ingest_slides([document_id])
+        print(f"[info] Ingested {ingested} slide chunks for document {document_id}.")
+    except Exception as exc:
+        print(f"[warn] Failed to ingest slide descriptions for {document_id}: {exc}")
+
 
 if __name__ == "__main__":
     import uvicorn

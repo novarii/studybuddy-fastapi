@@ -62,8 +62,9 @@ storage/documents/
    - `POST /api/documents/upload` streams validated PDFs into `storage/documents` and records metadata in `data/documents.json`.
    - `POST /api/documents/{document_id}/slides/describe` runs `PDFSlideDescriptionAgent` (Gemini) page-by-page and saves the resulting structured descriptions to `data/document_descriptions/{document_id}_slides.json`. Metadata for that document is updated with the output path + page counts.
 6. **Chunking for Knowledge Ingestion**
-   - Transcript ingestion uses `TimestampAwareChunking`, which honors ElevenLabs word segments to produce chunks annotated with `start_ms`, `end_ms`, `chunk_index`, `chunking_strategy`, `course_id`, and any extra metadata you provide.
-   - Slide ingestion uses `SlideChunking`, which emits one chunk per slide by default and splits oversized slides into deterministic parts while preserving `document_id`, `page_number`, and chunk counters.
+   - Transcript ingestion uses `TimestampAwareChunking`, which honors ElevenLabs word segments to produce chunks annotated with `start_ms`, `end_ms`, `chunk_index`, `chunking_strategy`, and the owning `lecture_id`. Course relationships live in SQLite, so we avoid duplicating `course_id` inside Chroma metadata.
+   - Slide ingestion uses `SlideChunking`, which emits one chunk per slide by default and splits oversized slides into deterministic parts while preserving `document_id`, `page_number`, and chunk counters (again without embedding the course identifier).
+   - `ChromaIngestionService` (see below) consumes these chunks automatically after transcripts or slide descriptions are generated, so manual scripts are only needed for backfills.
 7. **Agno AgentOS (Optional)**
    - `chat.py` wires an Agno Agent (Claude + SqliteDb) into AgentOS for experimentation but is separate from the primary FastAPI app.
 
@@ -103,7 +104,7 @@ Helper methods `link_lecture`, `link_document`, `list_lectures_for_course`, and 
 - `GET /api/videos/{video_id}` / `/api/videos/{video_id}/status` – retrieve metadata/progress.
 - `GET /api/videos/{video_id}/file` – download stored MP4.
 - `DELETE /api/videos/{video_id}` – remove media + metadata.
-- `POST /api/documents/upload` – ingest slide PDFs.
+- `POST /api/documents/upload` – ingest slide PDFs; immediately schedules the slide-description agent + Chroma ingestion in a FastAPI background task.
 - `POST /api/documents/{document_id}/slides/describe` – run the Gemini slide agent and persist results.
 
 ## External Integrations & Config
@@ -116,7 +117,7 @@ Helper methods `link_lecture`, `link_document`, `list_lectures_for_course`, and 
 ## Chunking Strategies & Testing
 1. **TimestampAwareChunking** (`app/chunkings/chunking.py`)
    - Requires `Document.meta_data["segments"] = transcript_segments`.
-   - Emits chunks with `chunk_index`, `chunking_strategy="timestamp_aware"`, `start_ms`, `end_ms`, and copies through `lecture_id`, `course_id`, etc.
+   - Emits chunks with `chunk_index`, `chunking_strategy="timestamp_aware"`, `start_ms`, `end_ms`, and copies through `lecture_id` plus timing metadata (course identifiers stay in SQLite).
    - Falls back to `chunking_strategy="timestamp_aware_fallback"` when no segments exist.
 2. **SlideChunking** (`app/chunkings/slide_chunking.py`)
    - Operates on structured slide descriptions, emitting one chunk per slide or splitting into two when content exceeds `max_chars`.
@@ -126,7 +127,9 @@ Helper methods `link_lecture`, `link_document`, `list_lectures_for_course`, and 
 These strategies ensure every chunk stored in Chroma (or another vector DB) stays immutable yet queryable by `lecture_id`/`document_id`, enabling course-level filtering via SQLite lookups instead of duplicating mutable metadata inside the embeddings.
 
 ### Chroma Ingestion
-- `scripts/ingest_chroma.py` is the entry point for writing lecture and slide chunks into persistent Chroma collections. Provide `--course-id`, `--user-id`, optional `--lectures` and `--documents`, plus the desired `--chroma-path`, `--lecture-collection`, and `--slide-collection`. The script reuses the chunkers above, strips heavy metadata (segments) before insertion, and prints how many chunks landed in each collection so search flows can query lectures/slides independently.
+- `app/chroma_ingestion.py` exposes `ChromaIngestionService`, which loads `.env.local`, converts `Document` chunks into Agno `Knowledge.add_contents` payloads, and sanitizes metadata (no `course_id` is written to Chroma—only `lecture_id` or `document_id`, chunk counters, and optional `user_id` remain).
+- The service is instantiated inside `app/main.py`, so completed ElevenLabs transcripts and uploaded PDFs automatically flow into Chroma without manual calls.
+- `scripts/ingest_chroma.py` is now a thin CLI wrapper around the shared service. Provide `--course-id`, `--user-id`, optional `--lectures` and `--documents`, plus the desired `--chroma-path`, `--lecture-collection`, and `--slide-collection`. The script prints how many chunks land in each collection for manual backfills or smoke tests.
 
 ## Related Docs
 - `.agent/SOP/adding_api_endpoint.md`
