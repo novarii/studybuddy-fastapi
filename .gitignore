@@ -7,3 +7,6 @@ storage/*
 data/*
 !data/.gitkeep
 .env.local
+package-lock.json
+tmp/*
+node_modules/*
