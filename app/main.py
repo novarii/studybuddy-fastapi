@@ -199,6 +199,15 @@ async def describe_document_slides(document_id: str):
     }
 
 
+@app.delete("/api/documents/{document_id}")
+async def delete_document(document_id: str):
+    """Delete a stored PDF and any derived slide descriptions."""
+    deleted = document_storage.delete_document(document_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {"status": "deleted", "document_id": document_id}
+
+
 @app.post("/api/courses")
 async def create_course(request: CourseCreateRequest):
     """Create a new course entry before uploading lectures."""

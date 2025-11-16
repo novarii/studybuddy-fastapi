@@ -165,6 +165,17 @@ curl "http://localhost:8000/api/videos/{video_id}/status"
 curl "http://localhost:8000/api/videos"
 ```
 
+### Export transcript or slide chunks to JSON
+
+```bash
+# Transcript chunks for a lecture
+PYTHONPATH=$PWD scripts/export_chunks.py --video-id video_20250101_120000_000000
+
+# Slide chunks from a processed document
+PYTHONPATH=$PWD scripts/export_chunks.py --document-id doc_20250102_130000_000000
+```
+Outputs land in `data/chunks/` for quick inspection before sending to Chroma.
+
 ## Project Structure
 
 ```

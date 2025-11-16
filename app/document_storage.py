@@ -79,6 +79,29 @@ class DocumentStorage:
 
         return output_path
 
+    def delete_document(self, document_id: str) -> bool:
+        """Remove a stored PDF and any generated slide descriptions."""
+        metadata = self._load_metadata()
+        entry = metadata.get(document_id)
+        if not entry:
+            return False
+
+        # Delete PDF file
+        file_path = Path(entry.get("file_path", ""))
+        if file_path.exists():
+            file_path.unlink()
+
+        # Delete slide descriptions if present
+        slide_path = entry.get("slide_descriptions_path")
+        if slide_path:
+            slide_file = Path(slide_path)
+            if slide_file.exists():
+                slide_file.unlink()
+
+        del metadata[document_id]
+        self._save_metadata(metadata)
+        return True
+
     def _load_metadata(self) -> Dict[str, Dict]:
         try:
             with open(self.metadata_file, "r") as fh:
