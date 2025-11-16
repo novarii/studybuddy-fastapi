@@ -5,17 +5,23 @@ from pathlib import Path
 from typing import Optional, List, Dict
 from app.models import VideoMetadata
 
+_NOT_SET = object()
+
 class LocalStorage:
     def __init__(self, storage_dir: str = "storage/videos", data_dir: str = "data", audio_dir: str = "storage/audio"):
         self.storage_dir = Path(storage_dir)
         self.data_dir = Path(data_dir)
         self.audio_dir = Path(audio_dir)
+        self.transcripts_dir = self.data_dir / "transcripts"
+        self.transcript_segments_dir = self.data_dir / "transcript_segments"
         self.metadata_file = self.data_dir / "videos.json"
         
         # Create directories if they don't exist
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.audio_dir.mkdir(parents=True, exist_ok=True)
+        self.transcripts_dir.mkdir(parents=True, exist_ok=True)
+        self.transcript_segments_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize metadata file if it doesn't exist
         if not self.metadata_file.exists():
@@ -71,10 +77,10 @@ class LocalStorage:
             "status": metadata.status,
             "error": metadata.error,
             "audio_path": metadata.audio_path,
-            "transcript": metadata.transcript,
             "transcript_status": metadata.transcript_status,
             "transcript_error": metadata.transcript_error,
-            "transcript_segments": metadata.transcript_segments,
+            "transcript_path": metadata.transcript_path,
+            "transcript_segments_path": metadata.transcript_segments_path,
         }
         self._save_metadata(metadata_dict)
         
@@ -102,6 +108,12 @@ class LocalStorage:
         metadata = self._load_metadata()
         if video_id not in metadata:
             return False
+        transcript_value = updates.pop("transcript", _NOT_SET)
+        if transcript_value is not _NOT_SET:
+            updates["transcript_path"] = self._write_transcript_file(video_id, transcript_value)
+        segments_value = updates.pop("transcript_segments", _NOT_SET)
+        if segments_value is not _NOT_SET:
+            updates["transcript_segments_path"] = self._write_transcript_segments_file(video_id, segments_value)
         metadata[video_id].update(updates)
         self._save_metadata(metadata)
         return True
@@ -109,7 +121,10 @@ class LocalStorage:
     def get_video(self, video_id: str) -> Optional[Dict]:
         """Get video metadata by ID"""
         metadata = self._load_metadata()
-        return metadata.get(video_id)
+        entry = metadata.get(video_id)
+        if not entry:
+            return None
+        return self._hydrate_payload(entry.copy())
     
     def list_videos(self) -> List[Dict]:
         """List all stored videos"""
@@ -132,6 +147,16 @@ class LocalStorage:
             audio_file = Path(audio_path)
             if audio_file.exists():
                 audio_file.unlink()
+        transcript_path = metadata[video_id].get("transcript_path")
+        if transcript_path:
+            transcript_file = Path(transcript_path)
+            if transcript_file.exists():
+                transcript_file.unlink()
+        transcript_segments_path = metadata[video_id].get("transcript_segments_path")
+        if transcript_segments_path:
+            segments_file = Path(transcript_segments_path)
+            if segments_file.exists():
+                segments_file.unlink()
         
         # Remove from metadata
         del metadata[video_id]
@@ -145,3 +170,37 @@ class LocalStorage:
         if video and os.path.exists(video["file_path"]):
             return Path(video["file_path"])
         return None
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _write_transcript_file(self, video_id: str, transcript: Optional[str]) -> Optional[str]:
+        path = self.transcripts_dir / f"{video_id}.txt"
+        if transcript is None:
+            if path.exists():
+                path.unlink()
+            return None
+        with path.open("w", encoding="utf-8") as handle:
+            handle.write(transcript)
+        return str(path)
+
+    def _write_transcript_segments_file(self, video_id: str, segments: Optional[List[Dict]]) -> Optional[str]:
+        path = self.transcript_segments_dir / f"{video_id}.json"
+        if segments is None:
+            if path.exists():
+                path.unlink()
+            return None
+        with path.open("w", encoding="utf-8") as handle:
+            json.dump(segments, handle, indent=2)
+        return str(path)
+
+    def _hydrate_payload(self, entry: Dict) -> Dict:
+        transcript_path = entry.get("transcript_path")
+        if transcript_path and Path(transcript_path).exists():
+            entry["transcript"] = Path(transcript_path).read_text(encoding="utf-8")
+        segments_path = entry.get("transcript_segments_path")
+        if segments_path and Path(segments_path).exists():
+            with Path(segments_path).open("r", encoding="utf-8") as handle:
+                entry["transcript_segments"] = json.load(handle)
+        return entry

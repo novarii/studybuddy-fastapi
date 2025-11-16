@@ -38,6 +38,8 @@ data/videos.json
 data/documents.json
 data/document_descriptions/
 data/app.db
+data/transcripts/
+data/transcript_segments/
 storage/videos/
 storage/audio/
 storage/documents/
@@ -52,7 +54,7 @@ storage/documents/
    - Downloader threads use `PanoptoDownloader` to fetch MP4s to a temp file, then `LocalStorage.store_video` moves them into `storage/videos` while updating `data/videos.json` with `course_id`/`course_name` and transcript placeholders.
 3. **Audio Extraction & Transcription**
    - `_convert_to_audio` runs `ffmpeg` to produce MP3s under `storage/audio`.
-   - When an `ElevenLabsTranscriber` is configured, `_transcribe_audio` uploads the MP3, captures word-level timestamps, and updates metadata with transcript text + `transcript_segments`.
+   - When an `ElevenLabsTranscriber` is configured, `_transcribe_audio` uploads the MP3, captures word-level timestamps, and `LocalStorage.update_metadata` persists the transcript text under `data/transcripts/{video_id}.txt` plus timestamp segments under `data/transcript_segments/{video_id}.json`. Only the resulting file paths, status, and errors are written back to `data/videos.json`.
 4. **Status + Retrieval APIs**
    - `GET /api/videos`, `/api/videos/{id}`, and `/api/videos/{id}/status` combine in-memory job state with persisted metadata (paths, transcript status, timing segments, course info).
    - `GET /api/videos/{id}/file` streams the stored MP4; `DELETE /api/videos/{id}` purges media + metadata.
@@ -72,12 +74,14 @@ storage/documents/
   - `course_id` (required) and friendly `course_name`
   - `file_path`, `file_size`, `uploaded_at`, `status`, `error`
   - `audio_path`
-  - `transcript`, `transcript_status`, `transcript_error`
-  - `transcript_segments` (list of `{text, start_ms, end_ms, ...}`)
+  - `transcript_status`, `transcript_error`
+  - `transcript_path`, `transcript_segments_path` (pointing to per-lecture payloads under `data/transcripts/` and `data/transcript_segments/`)
 - **`data/documents.json`** – keyed by `document_id`, storing:
   - `original_filename`, `content_type`, `file_path`, `file_size`, `uploaded_at`
   - `slide_descriptions_path`, `slide_descriptions_updated_at`, `slide_page_count` when the agent runs
 
+- **`data/transcripts/{video_id}.txt`** – raw transcript text per lecture.
+- **`data/transcript_segments/{video_id}.json`** – ElevenLabs word-level timestamps for each lecture.
 - **`data/document_descriptions/*.json`** – arrays of slide description dicts (`SlideContent.model_dump()`), ready for chunking + vector storage.
 
 ### SQLite (`data/app.db`)

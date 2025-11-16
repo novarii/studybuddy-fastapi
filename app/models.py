@@ -24,9 +24,11 @@ class VideoMetadata(BaseModel):
     error: Optional[str] = None
     audio_path: Optional[str] = None
     transcript: Optional[str] = None
+    transcript_path: Optional[str] = None
     transcript_status: Optional[str] = None
     transcript_error: Optional[str] = None
     transcript_segments: Optional[List[Dict[str, Any]]] = None
+    transcript_segments_path: Optional[str] = None
 
 
 class CourseCreateRequest(BaseModel):

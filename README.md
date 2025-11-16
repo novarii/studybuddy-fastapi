@@ -206,7 +206,7 @@ The server runs with auto-reload enabled when using the `--reload` flag, so chan
 - Videos are stored in the `storage/videos/` directory
 - Audio-only files are stored in `storage/audio/` and share the same `video_id` filename
 - Uploaded PDFs are stored in `storage/documents/` with metadata in `data/documents.json`
-- Metadata (including transcript text/status) is stored in `data/videos.json`
+- Metadata (status, file paths, etc.) lives in `data/videos.json`, while transcript text and segments are stored per-lecture under `data/transcripts/` and `data/transcript_segments/`
 - CORS is enabled for all origins (configure appropriately for production)
 
 ## Timestamp-aware chunking with Agno
@@ -217,15 +217,20 @@ use the `TimestampAwareChunking` strategy defined in `app/chunkings/chunking.py`
 metadata so the frontend and agents can jump directly to the right moment in a lecture.
 
 ```python
+import json
+from pathlib import Path
 from agno.knowledge.document.base import Document
 from app.chunkings.chunking import TimestampAwareChunking
+
+transcript_text = Path(metadata["transcript_path"]).read_text(encoding="utf-8")
+segments = json.loads(Path(metadata["transcript_segments_path"]).read_text(encoding="utf-8"))
 
 doc = Document(
     id=video_id,
     name=metadata["title"],
-    content=metadata["transcript"],
+    content=transcript_text,
     meta_data={
-        "segments": metadata["transcript_segments"],
+        "segments": segments,
         "lecture_id": video_id,
         "source": "transcript",
         "course_id": metadata.get("course_id"),

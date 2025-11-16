@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from agno.knowledge.document.base import Document
 
@@ -34,8 +34,8 @@ def export_transcript_chunks(video_id: str, limit: int | None = None) -> Path:
     metadata = videos.get(video_id)
     if not metadata:
         raise ValueError(f"Video {video_id} not found in {VIDEOS_JSON}")
-    transcript = metadata.get("transcript")
-    segments = metadata.get("transcript_segments") or []
+    transcript = _load_transcript(metadata)
+    segments = _load_transcript_segments(metadata)
     if not transcript:
         raise ValueError(f"Video {video_id} has no transcript text to chunk")
 
@@ -130,6 +130,27 @@ def main() -> None:
     if args.document_id:
         path = export_slide_chunks(args.document_id, limit=args.limit)
         print(f"Slide chunks written to {path}")
+
+
+def _load_transcript(metadata: Dict) -> Optional[str]:
+    text = metadata.get("transcript")
+    if text:
+        return text
+    path = metadata.get("transcript_path")
+    if path and Path(path).exists():
+        return Path(path).read_text(encoding="utf-8")
+    return None
+
+
+def _load_transcript_segments(metadata: Dict) -> List[Dict]:
+    segments = metadata.get("transcript_segments")
+    if segments:
+        return segments
+    path = metadata.get("transcript_segments_path")
+    if path and Path(path).exists():
+        with Path(path).open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    return []
 
 
 if __name__ == "__main__":
