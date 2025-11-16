@@ -39,9 +39,23 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     source: Literal["lectures", "slides", "combined"] = "combined"
     user_id: Optional[str] = None
+    course_id: str = Field(..., min_length=1)
 
 
 class ChatResponse(BaseModel):
     reply: str
     source: Literal["lectures", "slides", "combined"]
     references: Optional[List[Dict[str, Any]]] = None
+    session_id: Optional[str] = None
+
+
+class CourseUnitCreateRequest(BaseModel):
+    title: str = Field(..., min_length=1)
+    description: Optional[str] = None
+    position: Optional[int] = None
+
+
+class CourseTopicCreateRequest(BaseModel):
+    title: str = Field(..., min_length=1)
+    description: Optional[str] = None
+    position: Optional[int] = None

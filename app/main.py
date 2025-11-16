@@ -1,5 +1,6 @@
 import sqlite3
 from pathlib import Path
+from typing import List, Optional
 
 import json
 
@@ -12,6 +13,8 @@ from app.models import (
     CourseCreateRequest,
     ChatRequest,
     ChatResponse,
+    CourseUnitCreateRequest,
+    CourseTopicCreateRequest,
 )
 from app.downloader import VideoDownloader
 from app.storage import LocalStorage
@@ -195,6 +198,86 @@ async def get_document(document_id: str):
     return document
 
 
+@app.post("/api/courses/{course_id}/units")
+async def create_course_unit(course_id: str, request: CourseUnitCreateRequest):
+    """Create a new unit under a course."""
+    course = course_db.get_course(course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    from datetime import datetime
+
+    unit_id = f"unit_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+    try:
+        course_db.create_unit(
+            unit_id=unit_id,
+            course_id=course_id,
+            title=request.title,
+            description=request.description,
+            position=request.position,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "unit": {
+            "id": unit_id,
+            "course_id": course_id,
+            "title": request.title,
+            "description": request.description,
+            "position": request.position or 0,
+        }
+    }
+
+
+@app.get("/api/courses/{course_id}/units")
+async def list_course_units(course_id: str):
+    """List all units for a course."""
+    course = course_db.get_course(course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    rows = course_db.list_units(course_id)
+    return {"units": [dict(row) for row in rows], "count": len(rows)}
+
+
+@app.post("/api/units/{unit_id}/topics")
+async def create_unit_topic(unit_id: str, request: CourseTopicCreateRequest):
+    """Create a topic under a unit."""
+    unit = course_db.get_unit(unit_id)
+    if not unit:
+        raise HTTPException(status_code=404, detail="Unit not found")
+    from datetime import datetime
+
+    topic_id = f"topic_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+    try:
+        course_db.create_topic(
+            topic_id=topic_id,
+            unit_id=unit_id,
+            title=request.title,
+            description=request.description,
+            position=request.position,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "topic": {
+            "id": topic_id,
+            "unit_id": unit_id,
+            "title": request.title,
+            "description": request.description,
+            "position": request.position or 0,
+        }
+    }
+
+
+@app.get("/api/units/{unit_id}/topics")
+async def list_unit_topics(unit_id: str):
+    """List topics defined for a unit."""
+    unit = course_db.get_unit(unit_id)
+    if not unit:
+        raise HTTPException(status_code=404, detail="Unit not found")
+    rows = course_db.list_topics(unit_id)
+    return {"topics": [dict(row) for row in rows], "count": len(rows)}
+
+
 @app.post("/api/documents/{document_id}/slides/describe")
 async def describe_document_slides(document_id: str):
     """Generate structured slide descriptions for an uploaded PDF."""
@@ -275,6 +358,18 @@ async def list_courses():
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
     """Chat with the Agno agent backed by Chroma knowledge."""
+    course = course_db.get_course(request.course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    session_id = course_db.get_or_create_chat_session(
+        course_id=request.course_id, user_id=request.user_id
+    )
+    course_db.add_chat_message(
+        session_id=session_id,
+        role="user",
+        message=request.message,
+        source=request.source,
+    )
     try:
         result = chat_agent.respond(
             message=request.message,
@@ -285,10 +380,17 @@ async def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    course_db.add_chat_message(
+        session_id=session_id,
+        role="agent",
+        message=result.reply,
+        source=result.source,
+    )
     return ChatResponse(
         reply=result.reply,
         source=result.source,
         references=result.references,
+        session_id=session_id,
     )
 
 
@@ -296,7 +398,22 @@ async def chat_endpoint(request: ChatRequest):
 async def chat_stream_endpoint(request: ChatRequest):
     """Stream chat responses chunk-by-chunk using server-sent events."""
 
+    course = course_db.get_course(request.course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    session_id = course_db.get_or_create_chat_session(
+        course_id=request.course_id, user_id=request.user_id
+    )
+    course_db.add_chat_message(
+        session_id=session_id,
+        role="user",
+        message=request.message,
+        source=request.source,
+    )
+
     def event_generator():
+        reply_chunks: List[str] = []
+        yield f"data: {json.dumps({'event': 'session', 'session_id': session_id})}\n\n"
         try:
             stream = chat_agent.stream_response(
                 message=request.message,
@@ -306,15 +423,35 @@ async def chat_stream_endpoint(request: ChatRequest):
             for chunk in stream:
                 payload = {"event": chunk.event}
                 if getattr(chunk, "content", None) is not None:
-                    payload["content"] = str(chunk.content)
+                    content_piece = str(chunk.content)
+                    payload["content"] = content_piece
+                    reply_chunks.append(content_piece)
                 if getattr(chunk, "tools", None):
                     payload["tools"] = [tool.__dict__ for tool in chunk.tools]
                 yield f"data: {json.dumps(payload)}\n\n"
         except Exception as exc:
             error_payload = {"event": "error", "message": str(exc)}
             yield f"data: {json.dumps(error_payload)}\n\n"
+        finally:
+            if reply_chunks:
+                course_db.add_chat_message(
+                    session_id=session_id,
+                    role="agent",
+                    message="".join(reply_chunks),
+                    source=request.source,
+                )
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.get("/api/courses/{course_id}/chat/history")
+async def get_course_chat_history(course_id: str, user_id: Optional[str] = None):
+    """Retrieve chat sessions (and messages) for a course, optionally filtered by user."""
+    course = course_db.get_course(course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    sessions = course_db.get_chat_history(course_id, user_id=user_id)
+    return {"sessions": sessions, "count": len(sessions)}
 
 
 def process_document_pipeline(document_id: str) -> None:

@@ -139,6 +139,15 @@ Once the server is running, you can access:
 ### Course Management
 - `POST /api/courses` - Create a course record in SQLite (`course_id` returned)
 - `GET /api/courses` - List available courses for UI dropdowns/extensions
+- `POST /api/courses/{course_id}/units` - Create a unit for the specified course (title/description/position)
+- `GET /api/courses/{course_id}/units` - List all units for a course
+- `POST /api/units/{unit_id}/topics` - Create a topic inside a unit
+- `GET /api/units/{unit_id}/topics` - List topics belonging to a unit
+
+### Chat & Knowledge
+- `POST /api/chat` - Send a message to the StudyBuddy agent (requires `course_id`; response includes `session_id` so clients can associate history)
+- `POST /api/chat/stream` - Stream the same response over SSE; initial event contains the `session_id`
+- `GET /api/courses/{course_id}/chat/history` - Persisted chat sessions/messages for a course (filterable via `?user_id=`)
 
 ## Example Usage
 
