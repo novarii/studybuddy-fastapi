@@ -1,0 +1,1 @@
+{"version":3,"sources":["../../../src/lib/cloud/index.ts"],"sourcesContent":["export interface CopilotCloudOptions {\n  baseUrl?: string;\n  publicApiKey?: string;\n}\n"],"mappings":";;;;;;;;;;;;;;;AAAA;;","names":[]}

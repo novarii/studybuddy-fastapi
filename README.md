@@ -212,6 +212,27 @@ studybuddy-fastapi/
 └── README.md           # This file
 ```
 
+## Dev-only CopilotKit Bridge
+
+To proxy CopilotKit traffic from the Vite UI into StudyBuddy’s existing agent:
+
+1. **Expose AG-UI**
+   ```bash
+   python -m agent.dev_agui  # serves http://localhost:8001/agui (override via AGUI_PORT)
+   ```
+   The script wraps `StudyBuddyChatAgent` with the Agno v2 `AGUI` interface, so you interact with the same retrieval pipeline as `/api/chat`.
+
+2. **Start the CopilotKit bridge** (Node 18+)
+   ```bash
+   cd dev/copilotkit-server
+   npm install @ag-ui/agno @copilotkit/runtime cors dotenv express \
+              && npm install -D @types/express @types/node ts-node typescript
+   npx ts-node --project tsconfig.json server.ts  # hosts http://localhost:3000/api/copilotkit
+   ```
+   Optional env vars: `AGNO_AGENT_URL` (defaults to `http://localhost:8001/agui`) and `COPILOTKIT_PORT` (defaults to `3000`).
+
+3. **Point Vite’s CopilotChat runtime** at `http://localhost:3000/api/copilotkit`. Messages now flow: Vite → CopilotKit bridge → AG-UI → StudyBuddy agent.
+
 ## Development
 
 The server runs with auto-reload enabled when using the `--reload` flag, so changes to the code will automatically restart the server.

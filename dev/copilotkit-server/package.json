@@ -1,0 +1,22 @@
+{
+  "name": "copilotkit-dev-bridge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "AGNO_AGENT_URL=${AGNO_AGENT_URL:-http://localhost:8001/agui} node --loader ts-node/esm --no-warnings server.ts"
+  },
+  "dependencies": {
+    "@ag-ui/agno": "^0.0.3",
+    "@copilotkit/runtime": "^1.5.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.12.12",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}
