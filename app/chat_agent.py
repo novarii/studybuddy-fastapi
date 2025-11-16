@@ -4,6 +4,7 @@ Client-facing chat agent that searches lecture or slide knowledge stored in Chro
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from typing import Dict, Iterator, List, Literal, Optional, Sequence, Tuple
@@ -17,6 +18,16 @@ from agno.vectordb.chroma import ChromaDb
 from dotenv import load_dotenv
 
 from app.chroma_ingestion import ChromaIngestionConfig
+
+
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter("[%(levelname)s] %(name)s - %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+logger.propagate = False
 
 
 @dataclass
@@ -128,10 +139,18 @@ class StudyBuddyChatAgent:
         combined_docs: List[Dict] = []
         for label, knowledge in sources:
             docs = self._search_knowledge(knowledge, query, num_documents, filters)
+            logger.info("Knowledge retriever fetched %s docs from %s", len(docs), label)
             for doc in docs:
                 doc_meta = doc.get("meta_data") or {}
                 doc_meta.setdefault("knowledge_source", label)
                 doc["meta_data"] = doc_meta
+                # preview = (doc.get("content") or "")[:160].replace("\n", " ")
+                # logger.debug(
+                #     "Doc %s (%s): %s",
+                #     doc_meta.get("chunk_id") or doc.get("id") or "unknown",
+                #     label,
+                #     preview,
+                # )
                 combined_docs.append(doc)
 
         combined_docs.sort(key=lambda d: d.get("score") or 0, reverse=True)
