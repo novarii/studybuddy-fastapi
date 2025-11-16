@@ -168,11 +168,11 @@ curl "http://localhost:8000/api/videos"
 ### Export transcript or slide chunks to JSON
 
 ```bash
-# Transcript chunks for a lecture
-PYTHONPATH=$PWD scripts/export_chunks.py --video-id video_20250101_120000_000000
+# Transcript chunks for a lecture (first 3 chunks only)
+PYTHONPATH=$PWD scripts/export_chunks.py --video-id video_20250101_120000_000000 --limit 3
 
 # Slide chunks from a processed document
-PYTHONPATH=$PWD scripts/export_chunks.py --document-id doc_20250102_130000_000000
+PYTHONPATH=$PWD scripts/export_chunks.py --document-id doc_20250102_130000_000000 --limit 3
 ```
 Outputs land in `data/chunks/` for quick inspection before sending to Chroma.
 

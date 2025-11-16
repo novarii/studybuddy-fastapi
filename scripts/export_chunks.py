@@ -29,7 +29,7 @@ def load_json(path: Path) -> Dict:
         raise RuntimeError(f"Unable to parse {path}: {exc}") from exc
 
 
-def export_transcript_chunks(video_id: str) -> Path:
+def export_transcript_chunks(video_id: str, limit: int | None = None) -> Path:
     videos = load_json(VIDEOS_JSON)
     metadata = videos.get(video_id)
     if not metadata:
@@ -58,13 +58,14 @@ def export_transcript_chunks(video_id: str) -> Path:
 
     CHUNK_DIR.mkdir(parents=True, exist_ok=True)
     output_path = CHUNK_DIR / f"{video_id}_transcript_chunks.json"
+    payload = [serialize_document(chunk) for chunk in chunks[:limit] if chunk]
     with output_path.open("w", encoding="utf-8") as handle:
-        json.dump([serialize_document(chunk) for chunk in chunks], handle, indent=2)
+        json.dump(payload, handle, indent=2)
 
     return output_path
 
 
-def export_slide_chunks(document_id: str) -> Path:
+def export_slide_chunks(document_id: str, limit: int | None = None) -> Path:
     documents = load_json(DOCUMENTS_JSON)
     metadata = documents.get(document_id)
     if not metadata:
@@ -89,8 +90,9 @@ def export_slide_chunks(document_id: str) -> Path:
 
     CHUNK_DIR.mkdir(parents=True, exist_ok=True)
     output_path = CHUNK_DIR / f"{document_id}_slide_chunks.json"
+    payload = [serialize_document(chunk) for chunk in chunks[:limit] if chunk]
     with output_path.open("w", encoding="utf-8") as handle:
-        json.dump([serialize_document(chunk) for chunk in chunks], handle, indent=2)
+        json.dump(payload, handle, indent=2)
 
     return output_path
 
@@ -108,6 +110,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export chunks to JSON files for inspection")
     parser.add_argument("--video-id", help="Video ID to export transcript chunks")
     parser.add_argument("--document-id", help="Document ID to export slide chunks")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional number of chunks to export (defaults to all)",
+    )
     args = parser.parse_args()
     if not args.video_id and not args.document_id:
         parser.error("Specify at least --video-id or --document-id")
@@ -117,10 +125,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     if args.video_id:
-        path = export_transcript_chunks(args.video_id)
+        path = export_transcript_chunks(args.video_id, limit=args.limit)
         print(f"Transcript chunks written to {path}")
     if args.document_id:
-        path = export_slide_chunks(args.document_id)
+        path = export_slide_chunks(args.document_id, limit=args.limit)
         print(f"Slide chunks written to {path}")
 
 
