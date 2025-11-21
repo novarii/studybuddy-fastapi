@@ -198,6 +198,20 @@ async def get_document(document_id: str):
     return document
 
 
+@app.get("/api/documents/{document_id}/file")
+async def get_document_file(document_id: str):
+    """Stream the raw PDF file for a stored document."""
+    document = document_storage.get_document(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    pdf_path = Path(document.get("file_path", ""))
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="PDF file not found on disk")
+
+    return FileResponse(str(pdf_path), media_type="application/pdf", filename=pdf_path.name)
+
+
 @app.post("/api/courses/{course_id}/units")
 async def create_course_unit(course_id: str, request: CourseUnitCreateRequest):
     """Create a new unit under a course."""
