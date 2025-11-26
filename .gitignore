@@ -10,3 +10,6 @@ data/*
 package-lock.json
 tmp/*
 node_modules/*
+.pytest_cache/
+.DS_Store
+.vscode/

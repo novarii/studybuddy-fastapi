@@ -48,43 +48,34 @@ class LocalStorage:
         # Generate filename
         filename = f"{video_id}.mp4"
         destination = self.storage_dir / filename
-        
+
         # Check if destination already exists
         if destination.exists():
             # Remove existing file to avoid conflicts
             destination.unlink()
-        
+
         # Move file (or copy if on different filesystem)
         if os.path.exists(temp_file_path):
             shutil.move(temp_file_path, destination)
         else:
             raise FileNotFoundError(f"Temp file not found: {temp_file_path}")
-        
+
         # Get file size
         file_size = destination.stat().st_size
-        
+
         # Update metadata
-        metadata_dict = self._load_metadata()
-        metadata_dict[video_id] = {
-            "video_id": video_id,
-            "title": metadata.title,
-            "source_url": metadata.source_url,
-            "course_id": metadata.course_id,
-            "course_name": metadata.course_name,
-            "file_path": str(destination),
-            "file_size": file_size,
-            "uploaded_at": metadata.uploaded_at,
-            "status": metadata.status,
-            "error": metadata.error,
-            "audio_path": metadata.audio_path,
-            "transcript_status": metadata.transcript_status,
-            "transcript_error": metadata.transcript_error,
-            "transcript_path": metadata.transcript_path,
-            "transcript_segments_path": metadata.transcript_segments_path,
-        }
-        self._save_metadata(metadata_dict)
-        
+        metadata.video_path = str(destination)
+        metadata.video_size = file_size
+        metadata.asset_type = "video"
+        self.save_metadata_entry(metadata)
+
         return str(destination)
+
+    def save_metadata_entry(self, metadata: VideoMetadata) -> None:
+        """Persist the provided metadata model to disk."""
+        metadata_dict = self._load_metadata()
+        metadata_dict[metadata.video_id] = metadata.model_dump()
+        self._save_metadata(metadata_dict)
 
     def store_audio(self, temp_file_path: str, video_id: str) -> str:
         """Move extracted audio to storage/audio and update metadata"""
@@ -99,7 +90,17 @@ class LocalStorage:
         else:
             raise FileNotFoundError(f"Temp audio file not found: {temp_file_path}")
 
-        self.update_metadata(video_id, audio_path=str(destination))
+        audio_size = destination.stat().st_size
+        metadata = self._load_metadata().get(video_id, {})
+        asset_type = "audio"
+        if metadata.get("video_path") or metadata.get("file_path"):
+            asset_type = "hybrid"
+        self.update_metadata(
+            video_id,
+            audio_path=str(destination),
+            audio_size=audio_size,
+            asset_type=asset_type,
+        )
 
         return str(destination)
 
@@ -114,7 +115,9 @@ class LocalStorage:
         segments_value = updates.pop("transcript_segments", _NOT_SET)
         if segments_value is not _NOT_SET:
             updates["transcript_segments_path"] = self._write_transcript_segments_file(video_id, segments_value)
-        metadata[video_id].update(updates)
+        current_entry = self._ensure_asset_metadata(metadata[video_id])
+        current_entry.update(updates)
+        metadata[video_id] = self._ensure_asset_metadata(current_entry)
         self._save_metadata(metadata)
         return True
     
@@ -129,7 +132,7 @@ class LocalStorage:
     def list_videos(self) -> List[Dict]:
         """List all stored videos"""
         metadata = self._load_metadata()
-        return list(metadata.values())
+        return [self._normalize_entry(entry) for entry in metadata.values()]
     
     def delete_video(self, video_id: str) -> bool:
         """Delete video file and metadata"""
@@ -139,10 +142,13 @@ class LocalStorage:
             return False
         
         # Delete files
-        file_path = Path(metadata[video_id].get("file_path", ""))
-        if file_path.exists():
-            file_path.unlink()
-        audio_path = metadata[video_id].get("audio_path")
+        entry = self._ensure_asset_metadata(metadata[video_id])
+        video_path = entry.get("video_path") or entry.get("file_path")
+        if video_path:
+            video_file = Path(video_path)
+            if video_file.exists():
+                video_file.unlink()
+        audio_path = entry.get("audio_path")
         if audio_path:
             audio_file = Path(audio_path)
             if audio_file.exists():
@@ -164,11 +170,28 @@ class LocalStorage:
         
         return True
     
-    def get_file_path(self, video_id: str) -> Optional[Path]:
-        """Get the file path for a video"""
-        video = self.get_video(video_id)
-        if video and os.path.exists(video["file_path"]):
-            return Path(video["file_path"])
+    def get_audio_path(self, video_id: str) -> Optional[Path]:
+        """Get the audio path for a lecture if available."""
+        metadata = self._load_metadata()
+        entry = metadata.get(video_id)
+        if not entry:
+            return None
+        entry = self._ensure_asset_metadata(entry)
+        audio_path = entry.get("audio_path")
+        if audio_path and os.path.exists(audio_path):
+            return Path(audio_path)
+        return None
+
+    def get_video_path(self, video_id: str) -> Optional[Path]:
+        """Get the video path for legacy lectures if available."""
+        metadata = self._load_metadata()
+        entry = metadata.get(video_id)
+        if not entry:
+            return None
+        entry = self._ensure_asset_metadata(entry)
+        video_path = entry.get("video_path")
+        if video_path and os.path.exists(video_path):
+            return Path(video_path)
         return None
 
     # ------------------------------------------------------------------
@@ -196,11 +219,40 @@ class LocalStorage:
         return str(path)
 
     def _hydrate_payload(self, entry: Dict) -> Dict:
-        transcript_path = entry.get("transcript_path")
-        if transcript_path and Path(transcript_path).exists():
-            entry["transcript"] = Path(transcript_path).read_text(encoding="utf-8")
-        segments_path = entry.get("transcript_segments_path")
-        if segments_path and Path(segments_path).exists():
-            with Path(segments_path).open("r", encoding="utf-8") as handle:
-                entry["transcript_segments"] = json.load(handle)
+        normalized = self._normalize_entry(entry, hydrate_transcript=True)
+        return normalized
+
+    def _normalize_entry(self, entry: Dict, hydrate_transcript: bool = False) -> Dict:
+        normalized = self._ensure_asset_metadata(entry.copy())
+        if hydrate_transcript:
+            transcript_path = normalized.get("transcript_path")
+            if transcript_path and Path(transcript_path).exists():
+                normalized["transcript"] = Path(transcript_path).read_text(encoding="utf-8")
+            segments_path = normalized.get("transcript_segments_path")
+            if segments_path and Path(segments_path).exists():
+                with Path(segments_path).open("r", encoding="utf-8") as handle:
+                    normalized["transcript_segments"] = json.load(handle)
+        return normalized
+
+    def _ensure_asset_metadata(self, entry: Dict) -> Dict:
+        if entry is None:
+            return entry
+        legacy_path = entry.pop("file_path", None)
+        if legacy_path and not entry.get("video_path"):
+            entry["video_path"] = legacy_path
+        legacy_size = entry.pop("file_size", None)
+        if legacy_size is not None and entry.get("video_size") is None:
+            entry["video_size"] = legacy_size
+        asset_type = entry.get("asset_type")
+        audio_path = entry.get("audio_path")
+        video_path = entry.get("video_path")
+        if not asset_type:
+            if audio_path and video_path:
+                entry["asset_type"] = "hybrid"
+            elif audio_path:
+                entry["asset_type"] = "audio"
+            elif video_path:
+                entry["asset_type"] = "video"
+            else:
+                entry["asset_type"] = "audio"
         return entry

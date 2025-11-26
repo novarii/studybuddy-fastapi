@@ -1,6 +1,6 @@
 import sqlite3
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import json
 
@@ -46,6 +46,47 @@ downloader = VideoDownloader(storage, transcriber=transcriber, ingestion_service
 pdf_slide_agent = PDFSlideDescriptionAgent()
 course_db = CourseDatabase()
 chat_agent = StudyBuddyChatAgent(config=chroma_ingestor.config)
+
+
+def _with_asset_links(video_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach canonical audio/video URLs and inferred asset type to payloads."""
+    enriched = payload.copy()
+    enriched["audio_url"] = f"/api/audio/{video_id}"
+    video_path = enriched.get("video_path")
+    if video_path:
+        enriched["video_url"] = f"/api/videos/{video_id}/file"
+    if not enriched.get("asset_type"):
+        if enriched.get("audio_path") and video_path:
+            enriched["asset_type"] = "hybrid"
+        elif enriched.get("audio_path"):
+            enriched["asset_type"] = "audio"
+        elif video_path:
+            enriched["asset_type"] = "video"
+    return enriched
+
+
+def _audio_file_response(video_id: str) -> FileResponse:
+    """Return the stored MP3 for a lecture or raise informative 404s."""
+    audio_path = storage.get_audio_path(video_id)
+    if audio_path:
+        return FileResponse(
+            path=str(audio_path),
+            media_type="audio/mpeg",
+            filename=audio_path.name,
+        )
+
+    video_metadata = storage.get_video(video_id)
+    if video_metadata:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": "Audio file not found for this lecture.",
+                "video_available": bool(video_metadata.get("video_path")),
+                "remote_video_url": video_metadata.get("remote_video_url"),
+            },
+        )
+
+    raise HTTPException(status_code=404, detail="Video not found")
 
 @app.get("/")
 async def root():
@@ -96,6 +137,7 @@ async def download_video(request: VideoDownloadRequest):
             source_url=request.source_url,
             course_id=request.course_id,
             course_name=course_name,
+            audio_only=request.audio_only,
         )
         
         return {
@@ -105,6 +147,7 @@ async def download_video(request: VideoDownloadRequest):
             "message": "Video download started",
             "course_id": request.course_id,
             "course_name": course_name,
+            "audio_only": request.audio_only,
         }
     
     except Exception as e:
@@ -113,14 +156,17 @@ async def download_video(request: VideoDownloadRequest):
 @app.get("/api/videos")
 async def list_videos():
     """List all stored videos"""
-    videos = storage.list_videos()
+    videos = [_with_asset_links(video["video_id"], video) for video in storage.list_videos()]
     return {"videos": videos, "count": len(videos)}
 
 @app.get("/api/videos/active")
 async def list_active_downloads():
     """List all active downloads (in progress or recently completed)"""
-    active_downloads = downloader.downloads
-    return {"downloads": active_downloads, "count": len(active_downloads)}
+    downloads = {
+        video_id: _with_asset_links(video_id, payload)
+        for video_id, payload in downloader.downloads.items()
+    }
+    return {"downloads": downloads, "count": len(downloads)}
 
 @app.get("/api/videos/{video_id}/status")
 async def get_video_status(video_id: str):
@@ -130,7 +176,7 @@ async def get_video_status(video_id: str):
     if status.get("status") == "not_found":
         raise HTTPException(status_code=404, detail="Video not found")
     
-    return status
+    return _with_asset_links(video_id, status)
 
 @app.get("/api/videos/{video_id}")
 async def get_video_info(video_id: str):
@@ -140,21 +186,34 @@ async def get_video_info(video_id: str):
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
     
-    return video
+    return _with_asset_links(video_id, video)
+
+@app.get("/api/audio/{video_id}")
+async def download_audio_file(video_id: str):
+    """Download the audio file for a lecture."""
+    return _audio_file_response(video_id)
+
 
 @app.get("/api/videos/{video_id}/file")
 async def download_video_file(video_id: str):
-    """Download the video file"""
-    file_path = storage.get_file_path(video_id)
-    
-    if not file_path or not file_path.exists():
-        raise HTTPException(status_code=404, detail="Video file not found")
-    
-    return FileResponse(
-        path=str(file_path),
-        media_type="video/mp4",
-        filename=file_path.name
-    )
+    """Legacy download endpoint that now prefers audio but still streams MP4s for archives."""
+    audio_path = storage.get_audio_path(video_id)
+    if audio_path:
+        return FileResponse(
+            path=str(audio_path),
+            media_type="audio/mpeg",
+            filename=audio_path.name,
+        )
+
+    video_path = storage.get_video_path(video_id)
+    if video_path:
+        return FileResponse(
+            path=str(video_path),
+            media_type="video/mp4",
+            filename=video_path.name,
+        )
+
+    raise HTTPException(status_code=404, detail="Lecture asset not found")
 
 @app.delete("/api/videos/{video_id}")
 async def delete_video(video_id: str):

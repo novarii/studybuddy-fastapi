@@ -33,6 +33,7 @@ class VideoDownloader:
         source_url: Optional[str] = None,
         course_id: Optional[str] = None,
         course_name: Optional[str] = None,
+        audio_only: bool = True,
     ) -> str:
         """
         Download video from stream URL to local storage
@@ -45,41 +46,37 @@ class VideoDownloader:
         existing_video = self.storage.get_video(job_id)
         if existing_video and existing_video.get("status") == "completed":
             # Video already exists, return existing status
-            self.downloads[job_id] = {
-                "status": "completed",
-                "progress": 100,
-                "file_path": existing_video.get("file_path"),
-                "audio_path": existing_video.get("audio_path"),
-                "transcript": existing_video.get("transcript"),
-                "transcript_status": existing_video.get("transcript_status"),
-                "transcript_segments": existing_video.get("transcript_segments"),
-            }
+            self.downloads[job_id] = self._status_payload_from_video(existing_video)
             return job_id
-        
-        # Create unique temp file with video_id in name to avoid conflicts
-        temp_dir = tempfile.gettempdir()
-        temp_file_path = os.path.join(temp_dir, f"panopto_{job_id}_{datetime.now().strftime('%f')}.mp4")
-        
-        # Ensure temp file doesn't exist
-        if os.path.exists(temp_file_path):
-            os.unlink(temp_file_path)
-        
+
+        temp_file_path: Optional[str] = None
+        if not audio_only:
+            # Create unique temp file with video_id in name to avoid conflicts
+            temp_dir = tempfile.gettempdir()
+            temp_file_path = os.path.join(temp_dir, f"panopto_{job_id}_{datetime.now().strftime('%f')}.mp4")
+            if os.path.exists(temp_file_path):
+                os.unlink(temp_file_path)
+
         # Mark as downloading
         self.downloads[job_id] = {
             "status": "downloading",
             "progress": 0,
             "audio_path": None,
+            "video_path": None,
+            "asset_type": "audio" if audio_only else "hybrid",
             "transcript_status": "pending" if self.transcriber else None,
             "transcript": None,
             "transcript_segments": None,
             "course_id": course_id,
             "course_name": course_name,
+            "audio_only": audio_only,
+            "remote_video_url": source_url or stream_url,
         }
         
         # Start download in background thread
         thread = threading.Thread(
             target=self._download_worker,
-            args=(stream_url, temp_file_path, job_id, title, source_url, course_id, course_name)
+            args=(stream_url, temp_file_path, job_id, title, source_url, course_id, course_name, audio_only)
         )
         thread.daemon = True
         thread.start()
@@ -89,45 +86,52 @@ class VideoDownloader:
     def _download_worker(
         self,
         stream_url: str,
-        temp_file: str,
+        temp_file: Optional[str],
         video_id: str,
         title: Optional[str],
         source_url: Optional[str],
         course_id: Optional[str],
         course_name: Optional[str],
+        audio_only: bool,
     ):
-        """Background worker to download and store video"""
+        """Background worker to download and store video/audio"""
         audio_temp_file = None
         try:
-            # Progress callback
             def progress_callback(progress: int):
                 if video_id in self.downloads:
                     self.downloads[video_id]["progress"] = progress
-            
-            # Download to temp file
-            PanoptoDownloader.download(stream_url, temp_file, progress_callback)
-            audio_temp_file = self._convert_to_audio(temp_file, video_id)
-            
-            # Store video
+
             from app.models import VideoMetadata
             metadata = VideoMetadata(
                 video_id=video_id,
                 title=title,
-                source_url=source_url,
+                source_url=source_url or stream_url,
                 course_id=course_id,
                 course_name=course_name,
-                file_path="",  # Will be set by storage
-                file_size=0,   # Will be set by storage
                 uploaded_at=datetime.now().isoformat(),
                 status="completed",
-                transcript_status="pending" if self.transcriber else None
+                transcript_status="pending" if self.transcriber else None,
+                audio_only=audio_only,
+                asset_type="audio" if audio_only else "hybrid",
+                remote_video_url=source_url or stream_url,
             )
-            
-            file_path = self.storage.store_video(temp_file, video_id, metadata)
+
+            video_path = None
             audio_path = None
+
+            if audio_only:
+                audio_temp_file = self._download_audio_stream(stream_url, video_id)
+                self.storage.save_metadata_entry(metadata)
+            else:
+                PanoptoDownloader.download(stream_url, temp_file, progress_callback)
+                audio_temp_file = self._convert_to_audio(temp_file, video_id)
+                video_path = self.storage.store_video(temp_file, video_id, metadata)
+
             if audio_temp_file:
                 audio_path = self.storage.store_audio(audio_temp_file, video_id)
-            
+            else:
+                self.storage.update_metadata(video_id, asset_type="video" if video_path else "audio")
+
             transcript_info = None
             if self.transcriber and audio_path:
                 transcript_info = self._transcribe_audio(video_id, audio_path)
@@ -145,77 +149,44 @@ class VideoDownloader:
             self.downloads[video_id] = {
                 "status": "completed",
                 "progress": 100,
-                "file_path": file_path,
                 "audio_path": audio_path,
-                "transcript_status": (transcript_info or {}).get("status") if transcript_info else (
-                    "skipped" if not self.transcriber else "pending"
-                ),
+                "video_path": video_path,
+                "asset_type": "audio"
+                if (audio_only and not video_path)
+                else ("hybrid" if audio_path and video_path else "video"),
+                "transcript_status": (transcript_info or {}).get("status")
+                if transcript_info
+                else ("skipped" if not self.transcriber else "pending"),
                 "transcript": (transcript_info or {}).get("text"),
                 "transcript_segments": (transcript_info or {}).get("segments"),
                 "course_id": course_id,
                 "course_name": course_name,
+                "audio_only": audio_only,
+                "remote_video_url": metadata.remote_video_url,
             }
-            
+
         except RegexNotMatch:
-            error_msg = "Invalid stream URL"
-            self._handle_error(video_id, error_msg)
-        except FileExistsError as e:
-            # Handle file already exists error
-            error_msg = f"File already exists: {str(e)}. Trying to remove and retry..."
-            # Try to remove the existing file and retry
-            if os.path.exists(temp_file):
+            self._handle_error(video_id, "Invalid stream URL")
+        except FileExistsError as exc:
+            if temp_file and os.path.exists(temp_file):
                 try:
                     os.unlink(temp_file)
-                    # Retry download
-                    PanoptoDownloader.download(stream_url, temp_file, progress_callback)
-                    # Continue with storage if retry succeeds
-                    from app.models import VideoMetadata
-                    metadata = VideoMetadata(
-                        video_id=video_id,
-                        title=title,
-                        source_url=source_url,
-                        course_id=course_id,
-                        course_name=course_name,
-                        file_path="",
-                        file_size=0,
-                        uploaded_at=datetime.now().isoformat(),
-                        status="completed"
-                    )
-                    file_path = self.storage.store_video(temp_file, video_id, metadata)
-                    self.downloads[video_id] = {
-                        "status": "completed",
-                        "progress": 100,
-                        "file_path": file_path,
-                        "course_id": course_id,
-                        "course_name": course_name,
-                    }
-                except Exception as retry_error:
-                    self._handle_error(video_id, f"Retry failed: {str(retry_error)}")
-            else:
-                self._handle_error(video_id, error_msg)
+                except OSError:
+                    pass
+            self._handle_error(video_id, f"File already exists: {exc}")
         except Exception as e:
             error_msg = str(e)
-            # Check if it's a "file already exists" error in the message
-            if "already exists" in error_msg.lower() or "File already exists" in error_msg:
-                # Try to handle it by removing the file
-                if os.path.exists(temp_file):
-                    try:
-                        os.unlink(temp_file)
-                        error_msg = f"File conflict resolved. Please retry the download."
-                    except:
-                        pass
-            self._handle_error(video_id, error_msg)
-            # Clean up temp file on error
-            if os.path.exists(temp_file):
+            if temp_file and os.path.exists(temp_file):
                 try:
                     os.unlink(temp_file)
-                except:
+                except OSError:
                     pass
+            self._handle_error(video_id, error_msg)
         finally:
             if audio_temp_file and os.path.exists(audio_temp_file):
                 try:
                     os.unlink(audio_temp_file)
-                except:
+                except OSError:
                     pass
     
     def _handle_error(self, video_id: str, error_msg: str):
@@ -225,6 +196,8 @@ class VideoDownloader:
             "progress": 0,
             "error": error_msg,
             "audio_path": None,
+            "video_path": None,
+            "asset_type": None,
             "transcript_status": None,
             "transcript": None,
             "transcript_segments": None,
@@ -244,17 +217,26 @@ class VideoDownloader:
         # Check stored videos
         video = self.storage.get_video(video_id)
         if video:
-            return {
-                "status": video["status"],
-                "progress": 100 if video["status"] == "completed" else 0,
-                "file_path": video["file_path"],
-                "audio_path": video.get("audio_path"),
-                "transcript": video.get("transcript"),
-                "transcript_status": video.get("transcript_status"),
-                "transcript_segments": video.get("transcript_segments"),
-            }
+            return self._status_payload_from_video(video)
         
         return {"status": "not_found"}
+
+    def _status_payload_from_video(self, video: dict) -> dict:
+        """Normalize stored metadata into the status schema used by the API."""
+        return {
+            "status": video.get("status"),
+            "progress": 100 if video.get("status") == "completed" else 0,
+            "audio_path": video.get("audio_path"),
+            "video_path": video.get("video_path"),
+            "asset_type": video.get("asset_type"),
+            "transcript": video.get("transcript"),
+            "transcript_status": video.get("transcript_status"),
+            "transcript_segments": video.get("transcript_segments"),
+            "course_id": video.get("course_id"),
+            "course_name": video.get("course_name"),
+            "audio_only": video.get("audio_only"),
+            "remote_video_url": video.get("remote_video_url"),
+        }
 
     def _convert_to_audio(self, video_path: str, video_id: str) -> Optional[str]:
         """Use ffmpeg to extract audio from the downloaded video"""
@@ -274,6 +256,29 @@ class VideoDownloader:
         if result.returncode != 0:
             raise RuntimeError(
                 f"ffmpeg audio extraction failed for {video_id}: {result.stderr.decode('utf-8', 'ignore')}"
+            )
+        return audio_temp_file
+
+    def _download_audio_stream(self, stream_url: str, video_id: str) -> str:
+        """Download only the audio track from the remote stream using ffmpeg."""
+        temp_dir = tempfile.gettempdir()
+        audio_temp_file = os.path.join(
+            temp_dir, f"panopto_audio_{video_id}_{datetime.now().strftime('%f')}.m4a"
+        )
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            stream_url,
+            "-vn",
+            "-acodec",
+            "copy",
+            audio_temp_file,
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"ffmpeg audio-only download failed for {video_id}: {result.stderr.decode('utf-8', 'ignore')}"
             )
         return audio_temp_file
 

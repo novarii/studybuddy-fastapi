@@ -3,13 +3,14 @@
 Use this index to locate the latest internal docs for the StudyBuddy FastAPI project.
 
 ## System Docs
-- [`System/project_architecture.md`](System/project_architecture.md) – Current-state architecture reference covering runtime topology, API surface, ingestion workflows, persistence schema (JSON/SQLite/Chroma), and required external services + environment variables.
+- [`System/project_architecture.md`](System/project_architecture.md) – Current-state architecture covering lecture + slide ingestion, course scaffolding, chat persistence, API surface, persistence schema (JSON/SQLite/Chroma), and required env/dependency notes.
 
 ## SOPs
 - [`SOP/adding_api_endpoint.md`](SOP/adding_api_endpoint.md) – Checklist for designing, implementing, and documenting new FastAPI routes or business logic changes.
 
 ## Tasks & Feature Briefs
-- [`Tasks/current_features.md`](Tasks/current_features.md) – PRD-level summaries and implementation snapshots for current features (video download, audio extraction, transcription), plus follow-up ideas.
+- [`Tasks/current_features.md`](Tasks/current_features.md) – PRD-level snapshots for lecture ingestion, slide description/Chroma ingestion, and the new course+chat persistence surface, plus planned improvements.
+- [`Tasks/audio_only_followups.md`](Tasks/audio_only_followups.md) – Action items for the new audio-only download mode (playback routing, metadata exposure, operational hardening).
 
 When adding new docs:
 1. Place them in the appropriate subfolder (System, SOP, Tasks).

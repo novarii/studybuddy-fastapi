@@ -10,6 +10,7 @@ class VideoDownloadRequest(BaseModel):
     metadata: Optional[dict] = None
     course_id: Optional[str] = None
     course_name: Optional[str] = None
+    audio_only: bool = True
 
 class VideoMetadata(BaseModel):
     video_id: str
@@ -17,18 +18,22 @@ class VideoMetadata(BaseModel):
     source_url: Optional[str]
     course_id: Optional[str] = None
     course_name: Optional[str] = None
-    file_path: str
-    file_size: int
+    video_path: Optional[str] = None
+    video_size: Optional[int] = None
+    audio_path: Optional[str] = None
+    audio_size: Optional[int] = None
     uploaded_at: str
     status: str  # "downloading", "completed", "failed"
     error: Optional[str] = None
-    audio_path: Optional[str] = None
     transcript: Optional[str] = None
     transcript_path: Optional[str] = None
     transcript_status: Optional[str] = None
     transcript_error: Optional[str] = None
     transcript_segments: Optional[List[Dict[str, Any]]] = None
     transcript_segments_path: Optional[str] = None
+    audio_only: bool = True
+    asset_type: Literal["audio", "video", "hybrid"] = "audio"
+    remote_video_url: Optional[str] = None
 
 
 class CourseCreateRequest(BaseModel):

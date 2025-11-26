@@ -1,33 +1,37 @@
 # Feature Briefs & Plans
 
-## Panopto Video Download & Storage
-- **PRD Summary**: Users submit a Panopto stream URL and optional metadata; the system downloads the MP4, persists it locally, and exposes metadata plus the original file via REST.
+## Panopto Lecture Pipeline
+- **PRD Summary**: Students submit a Panopto stream alongside `course_id`; the backend downloads the MP4, extracts audio, runs transcription, and ships transcript chunks to Chroma so downstream chat can cite lecture segments.
 - **Implementation Snapshot**:
-  - `VideoDownloader.download_video` validates input, tracks job progress, and invokes `PanoptoDownloader`.
-  - `LocalStorage.store_video` moves temp files into `storage/videos` and updates `data/videos.json`.
-  - API routes in `app/main.py` surface job status (`/api/videos/active`) and persisted records (`/api/videos`).
-- **Future Enhancements**:
-  - Replace ad-hoc threading with a task queue (Celery / RQ) for better concurrency.
-  - Add pytest coverage to prevent regressions in downloader and storage layers.
-
-## Audio Extraction & ElevenLabs Transcription
-- **PRD Summary**: For every completed video download, automatically extract an MP3 track, store it, and submit audio to ElevenLabs Speech-to-Text. Persist transcript text and status for retrieval.
-- **Implementation Snapshot**:
-  - `_convert_to_audio` in `app/downloader.py` runs ffmpeg to create MP3 files stored under `storage/audio`.
-  - `ElevenLabsTranscriber` (`app/transcriber.py`) loads `ELEVENLABS_*` env vars, calls `POST /v1/speech-to-text`, and returns transcript data.
-  - Metadata now includes `audio_path`, `transcript`, `transcript_status`, and `transcript_error`, exposed via `/api/videos/{video_id}` and `/api/videos/{video_id}/status`.
+  - `VideoDownloader.download_video` validates the course, tracks in-memory progress, and spawns `_download_worker` threads per job.
+  - `_download_worker` streams to a temp file via `PanoptoDownloader`, extracts MP3 audio with ffmpeg, and persists canonical metadata through `LocalStorage.store_video`.
+  - `ElevenLabsTranscriber` handles transcription; results flow back through `LocalStorage.update_metadata` to write transcript text + timestamp segments that `ChromaIngestionService.ingest_lectures` later chunk with `TimestampAwareChunking`.
+  - `/api/videos/*` routes expose active download progress, persisted metadata, raw files, and delete orchestration.
 - **Next Steps**:
-  - Streamline error handling by retrying ElevenLabs failures or allowing manual re-transcription.
-  - Consider queueing transcription so ffmpeg completion doesn’t block the download thread.
+  - Swap ad-hoc threads for a real task runner (Celery/RQ) so large batches do not compete for Python threads.
+  - Add retries/manual overrides for failed ElevenLabs jobs; allow ingestion replays without forcing a re-download.
 
-## PDF Slide Uploads
-- **PRD Summary**: Allow users to upload supporting PDF slide decks for future processing or reference. Files must remain local and be retrievable via metadata APIs later.
+## Slide Upload, Description & Chroma Ingestion
+- **PRD Summary**: Upload PDF slide decks, auto-describe each page with Gemini, convert descriptions into Chroma slide chunks, and keep metadata + files manageable through REST endpoints.
 - **Implementation Snapshot**:
-  - `DocumentStorage.save_document` streams the incoming file to `storage/documents` and records metadata inside `data/documents.json`.
-  - `POST /api/documents/upload` validates MIME type/extension (PDF only) and returns the stored metadata (IDs, paths, timestamps).
+  - `DocumentStorage.save_document` streams PDFs to `storage/documents` and records metadata; `/api/documents/upload` queues `process_document_pipeline` for async Gemini processing.
+  - `PDFSlideDescriptionAgent` (Gemini) emits structured `SlideContent` per page; `DocumentStorage.save_slide_descriptions` writes JSON under `data/document_descriptions/` and annotates metadata with updated timestamps + page counts.
+  - `ChromaIngestionService.ingest_slides` reads the stored JSON, uses `chunk_slide_descriptions` (`SlideChunking`), and stores slide chunks with `document_id`, `page_number`, `slide_type`, and optional `user_id` metadata.
+  - REST surface now includes document listing, metadata fetch, raw file streaming, synchronous `/slides/describe`, and deletion endpoints.
 - **Next Steps**:
-  - Add listing and retrieval endpoints for documents.
-  - Extend metadata or services to parse PDFs or associate them with video IDs.
+  - Associate documents with courses via `CourseDatabase.link_document` so ingestion filters can scope to a course without extra metadata.
+  - Add observability around Gemini failures + ingestion metrics (per-page latency, chunk counts) for UI surfacing.
+
+## Course Structure & Chat History
+- **PRD Summary**: Persist course context (units, topics) and chat history per course/user so StudyBuddy can provide structured outlines and replay previous Q&A sessions.
+- **Implementation Snapshot**:
+  - `CourseDatabase` now bootstraps `course_units`, `course_topics`, `chat_sessions`, and `chat_messages` tables inside `data/app.db`.
+  - `/api/courses/{course_id}/units` and `/api/units/{unit_id}/topics` endpoints create + list outline data using timestamp-derived IDs with optional `position` ordering.
+  - `/api/chat` + `/api/chat/stream` verify courses, maintain per-user chat sessions, and append every user/agent exchange to SQLite (streaming concatenates reply chunks before insert).
+  - `/api/courses/{course_id}/chat/history` exposes sessions + nested messages for dashboards or auditing. Future `link_lecture`/`link_document` helpers already exist for tighter associations.
+- **Next Steps**:
+  - Surface unit/topic data inside chat prompts to provide additional retrieval hints (requires linking ingestion IDs to course structures).
+  - Add pagination + search to chat history endpoint once sessions get large; consider retention rules per user/course.
 
 ## Related Docs
 - `.agent/System/project_architecture.md`

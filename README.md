@@ -1,10 +1,10 @@
-# StudyBuddy FastAPI - Panopto Video Downloader API
+# StudyBuddy FastAPI - Panopto Lecture Downloader API
 
-A FastAPI-based REST API for downloading videos from Panopto streaming URLs.
+A FastAPI-based REST API for downloading Panopto streams with an audio-first workflow.
 
 ## Features
 
-- Download videos from Panopto stream URLs
+- Download Panopto streams and persist MP3 audio as the canonical artifact
 - Extract audio tracks (MP3 via ffmpeg) alongside each download
 - Transcribe audio tracks to text through the ElevenLabs Speech-to-Text API
 - Upload PDF slide decks for local storage (future processing)
@@ -127,8 +127,11 @@ Once the server is running, you can access:
 - `GET /api/videos/active` - List active downloads
 - `GET /api/videos/{video_id}` - Get video metadata
 - `GET /api/videos/{video_id}/status` - Get download status
-- `GET /api/videos/{video_id}/file` - Download video file
+- `GET /api/audio/{video_id}` - Download the MP3 artifact for a lecture (primary route)
+- `GET /api/videos/{video_id}/file` - Legacy download route; returns audio when available and falls back to MP4 for archived entries
 - `DELETE /api/videos/{video_id}` - Delete a video
+
+`POST /api/videos/download` defaults to `{"audio_only": true}` to avoid persisting MP4s unless explicitly requested.
 
 ### Document Management
 - `POST /api/documents/upload` - Upload PDF slides; file is saved under `storage/documents/` and metadata recorded in `data/documents.json`
@@ -161,7 +164,8 @@ curl -X POST "http://localhost:8000/api/videos/download" \
     "title": "My Video",
     "source_url": "https://example.panopto.com/...",
     "course_id": "course_20250101_120000_000000",
-    "course_name": "CSC282 - Algorithms"
+    "course_name": "CSC282 - Algorithms",
+    "audio_only": true
   }'
 ```
 
